@@ -253,6 +253,11 @@ static void factory_reset_password(lv_timer_t *timer);
 /**
  * Factory resets the device
  */
+static int drop_caches(void);
+
+/**
+ * Factory resets the device
+ */
 static int factory_reset(void);
 
 /**
@@ -522,12 +527,31 @@ static void factory_reset_password(lv_timer_t *timer) {
     }
 }
 
+static int drop_caches() {
+    int fd = open("/proc/sys/vm/drop_caches", O_WRONLY);
+    if (fd == -1) {
+        perror("Failed to open /proc/sys/vm/drop_caches");
+        return -1;
+    }
+
+    if (write(fd, "1", 1) != 1) {
+        perror("Failed to write to /proc/sys/vm/drop_caches");
+        close(fd);
+        return -1;
+    }
+
+    close(fd);
+    return 0;
+}
+
 static int factory_reset(void) {
     // the reason most things here are system calls is because our ramdisk must be small and more libraries we link against the bigger the binary will get
     // here, we're using pre existing binaries in the ramdisk to not take too much storage in the ramdisk
     struct stat buffer;
     int result;
     char cmd[256];
+
+    drop_caches(); // tar will fill up cache, has to be cleared before writing
 
     if (stat("/dev/disk/by-partlabel/super", &buffer) == 0) {
         // if system_a doesn't exist
@@ -559,44 +583,25 @@ static int factory_reset(void) {
     }
 
     if (stat("/system_mnt/userdata.img.tar.gz", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "tar -xzvf /system_mnt/userdata.img.tar.gz");
+        snprintf(cmd, sizeof(cmd), "tar -xzOf /system_mnt/userdata.img.tar.gz | dd of=/dev/disk/by-partlabel/userdata bs=4M");
+    } else if (stat("/system_mnt/userdata-raw.img.tar.gz", &buffer) == 0) {
+        snprintf(cmd, sizeof(cmd), "tar -xzOf /system_mnt/userdata-raw.img.tar.gz | dd of=/dev/disk/by-partlabel/userdata bs=4M");
     } else {
-        if (stat("/system_mnt/userdata-raw.img.tar.gz", &buffer) == 0) {
-            snprintf(cmd, sizeof(cmd), "tar -xzvf /system_mnt/userdata-raw.img.tar.gz");
-        } else {
-            printf("Failed to find userdata archive\n");
-            umount("/system_mnt");
-            return -1;
-        }
-    }
-
-    result = system(cmd);
-    if (result != 0) {
-        printf("Failed to unpack userdata in system\n");
+        printf("Failed to find userdata archive\n");
         umount("/system_mnt");
         return -1;
     }
 
-    if (stat("/userdata-raw.img", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "dd if=/userdata-raw.img of=/dev/disk/by-partlabel/userdata bs=4M");
-    } else {
-        if (stat("/userdata.img", &buffer) == 0) {
-            snprintf(cmd, sizeof(cmd), "dd if=/userdata.img of=/dev/disk/by-partlabel/userdata bs=4M");
-        } else {
-            printf("Failed to find extracted userdata image\n");
-            umount("/system_mnt");
-            return -1;
-        }
-    }
-
     result = system(cmd);
     if (result != 0) {
-        printf("Failed to write userdata\n");
+        printf("Failed to extract and write userdata\n");
         umount("/system_mnt");
         return -1;
     }
 
     umount("/system_mnt");
+
+    drop_caches();
 
     return 0;
 }
