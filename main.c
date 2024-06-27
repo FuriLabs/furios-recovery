@@ -996,13 +996,8 @@ int main(int argc, char *argv[]) {
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
     /* Run lvgl in "tickless" mode */
-    uint32_t timeout = conf_opts.general.timeout * 1000; /* ms */
     while(1) {
-        if (!timeout || lv_disp_get_inactive_time(NULL) < timeout) {
-            lv_task_handler();
-        } else if (timeout) {
-            shutdown();
-        }
+        lv_task_handler();
         usleep(5000);
     }
 
