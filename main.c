@@ -47,6 +47,7 @@
 
 #include "squeek2lvgl/sq2lv.h"
 
+#include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +57,7 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #define NUM_IMAGES 1
 
@@ -65,6 +67,9 @@
 
 ul_cli_opts cli_opts;
 ul_config_opts conf_opts;
+
+static lv_color_t *buf = NULL;
+static lv_disp_draw_buf_t disp_buf;
 
 bool is_alternate_theme = true;
 bool is_password_obscured = true;
@@ -79,6 +84,7 @@ lv_obj_t *factory_reset_btn;
 lv_obj_t *theme_btn;
 lv_obj_t *ssh_btn;
 lv_obj_t *ssh_btn_label;
+lv_obj_t *terminal_btn;
 
 LV_IMG_DECLARE(furilabs_white)
 LV_IMG_DECLARE(furilabs_black)
@@ -189,6 +195,20 @@ static void shutdown_btn_clicked_cb(lv_event_t *event);
 static void shutdown_mbox_value_changed_cb(lv_event_t *event);
 
 /**
+ * Handle LV_EVENT_CLICKED events from the terminal button.
+ *
+ * @param event the event object
+ */
+static void terminal_btn_clicked_cb(lv_event_t *event);
+
+/**
+ * Handle LV_EVENT_VALUE_CHANGED events from the terminal message box.
+ *
+ * @param event the event object
+ */
+static void terminal_mbox_value_changed_cb(lv_event_t *event);
+
+/**
  * Handle LV_EVENT_CLICKED events from the reboot button.
  *
  * @param event the event object
@@ -281,12 +301,43 @@ static void reboot_device(void);
 static void shutdown(void);
 
 /**
+ * Launch another instance of recovery before exiting in open_terminal
+ *
+ * @param unused
+ */
+static void* run_recovery(void* arg);
+
+/**
+ * Opens furios-terminal
+ */
+static void open_terminal(void);
+
+/**
  * Handle termination signals sent to the process.
  *
  * @param signum the signal's number
  */
 static void sigaction_handler(int signum);
 
+/**
+ * Create all buttons in the label container
+ *
+ * @param label container to create buttons in
+ */
+static void create_buttons(lv_obj_t *label_container);
+
+/**
+ * Create main UI
+ *
+ * @param horizantal resolution
+ * @param vertical resolution
+ */
+static void create_ui(uint32_t hor_res, uint32_t ver_res);
+
+/**
+ * Initialize recovery UI
+ */
+static void initialize_recovery_ui(void);
 
 /**
  * Static functions
@@ -299,7 +350,7 @@ static void toggle_theme_btn_clicked_cb(lv_event_t *event) {
 
 static void toggle_theme(void) {
     is_alternate_theme = !is_alternate_theme;
- 
+
     update_image_mode(is_alternate_theme);
     set_theme(is_alternate_theme);
 }
@@ -371,6 +422,23 @@ static void shutdown_mbox_value_changed_cb(lv_event_t *event) {
     lv_obj_t *mbox = lv_event_get_current_target(event);
     if (lv_msgbox_get_active_btn(mbox) == 0) {
         shutdown();
+    }
+    lv_msgbox_close(mbox);
+}
+
+static void terminal_btn_clicked_cb(lv_event_t *event) {
+    LV_UNUSED(event);
+    static const char *btns[] = { "Yes", "No", "" };
+    lv_obj_t *mbox = lv_msgbox_create(NULL, NULL, "Open terminal?", btns, false);
+    lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+    lv_obj_add_event_cb(mbox, terminal_mbox_value_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_center(mbox);
+}
+
+static void terminal_mbox_value_changed_cb(lv_event_t *event) {
+    lv_obj_t *mbox = lv_event_get_current_target(event);
+    if (lv_msgbox_get_active_btn(mbox) == 0) {
+        open_terminal();
     }
     lv_msgbox_close(mbox);
 }
@@ -712,6 +780,7 @@ static void decrypt(void) {
     lv_obj_add_flag(shutdown_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(factory_reset_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* Main flexbox */
@@ -812,6 +881,67 @@ static void shutdown(void) {
     reboot(RB_POWER_OFF);
 }
 
+static void* run_recovery(void* arg) {
+    LV_UNUSED(arg);
+
+    char *recovery_args[] = {"/usr/bin/furios-recovery", NULL};
+    execv(recovery_args[0], recovery_args);
+    perror("execv");
+    return NULL;
+}
+
+static void open_terminal(void) {
+    lv_obj_clean(lv_scr_act());
+    lv_deinit();
+    if (buf)
+        free(buf);
+
+    switch (conf_opts.general.backend) {
+#if USE_FBDEV
+    case UL_BACKENDS_BACKEND_FBDEV:
+        fbdev_exit();
+        break;
+#endif /* USE_FBDEV */
+#if USE_DRM
+    case UL_BACKENDS_BACKEND_DRM:
+        drm_exit();
+        break;
+#endif /* USE_DRM */
+#if USE_MINUI
+    case UL_BACKENDS_BACKEND_MINUI:
+        minui_exit();
+        break;
+#endif /* USE_MINUI */
+    }
+
+    ul_terminal_reset_current_terminal();
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        char *args[] = {"/usr/bin/furios-terminal", NULL};
+        execv(args[0], args);
+    } else {
+        waitpid(pid, NULL, 0);
+        printf("Terminal exited, reinitializing recovery\n");
+
+        pthread_t recovery_thread;
+        int thread_result = pthread_create(&recovery_thread, NULL, run_recovery, NULL);
+        if (thread_result != 0) {
+            perror("pthread_create");
+            exit(1);
+        }
+
+        thread_result = pthread_detach(recovery_thread);
+        if (thread_result != 0) {
+            perror("pthread_detach");
+            exit(1);
+        }
+
+        sleep(1); // wait for the other instance to start
+        exit(0);
+    }
+}
+
 static void sigaction_handler(int signum) {
     LV_UNUSED(signum);
     ul_terminal_reset_current_terminal();
@@ -853,150 +983,7 @@ static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
     }
 }
 
-/**
- * Main
- */
-
-int main(int argc, char *argv[]) {
-    /* Parse command line options */
-    ul_cli_parse_opts(argc, argv, &cli_opts);
-
-    /* Set up log level */
-    if (cli_opts.verbose) {
-        ul_log_set_level(UL_LOG_LEVEL_VERBOSE);
-    }
-
-    /* Announce ourselves */
-    ul_log(UL_LOG_LEVEL_VERBOSE, "furios-recovery %s", UL_VERSION);
-
-    /* Parse config files */
-    ul_config_parse(cli_opts.config_files, cli_opts.num_config_files, &conf_opts);
-
-    /* Prepare current TTY and clean up on termination */
-    ul_terminal_prepare_current_terminal();
-    struct sigaction action;
-    memset(&action, 0, sizeof(action));
-    action.sa_handler = sigaction_handler;
-    sigaction(SIGINT, &action, NULL);
-    sigaction(SIGTERM, &action, NULL);
-
-    /* Initialise LVGL and set up logging callback */
-    lv_init();
-
-    lv_log_register_print_cb(ul_log_print_cb);
-
-    /* Initialise display driver */
-    static lv_disp_drv_t disp_drv;
-    lv_disp_drv_init(&disp_drv);
-
-    /* Initialise framebuffer driver and query display size */
-    uint32_t hor_res = 0;
-    uint32_t ver_res = 0;
-    uint32_t dpi = 0;
-
-    switch (conf_opts.general.backend) {
-#if USE_FBDEV
-    case UL_BACKENDS_BACKEND_FBDEV:
-        fbdev_init();
-        fbdev_get_sizes(&hor_res, &ver_res, &dpi);
-        disp_drv.flush_cb = fbdev_flush;
-        break;
-#endif /* USE_FBDEV */
-#if USE_DRM
-    case UL_BACKENDS_BACKEND_DRM:
-        drm_init();
-        drm_get_sizes((lv_coord_t *)&hor_res, (lv_coord_t *)&ver_res, &dpi);
-        disp_drv.flush_cb = drm_flush;
-        break;
-#endif /* USE_DRM */
-#if USE_MINUI
-    case UL_BACKENDS_BACKEND_MINUI:
-        minui_init();
-        minui_get_sizes(&hor_res, &ver_res, &dpi);
-        disp_drv.flush_cb = minui_flush;
-        break;
-#endif /* USE_MINUI */
-    default:
-        ul_log(UL_LOG_LEVEL_ERROR, "Unable to find suitable backend");
-        exit(EXIT_FAILURE);
-    }
-
-    /* Override display parameters with command line options if necessary */
-    if (cli_opts.hor_res > 0) {
-        hor_res = cli_opts.hor_res;
-    }
-    if (cli_opts.ver_res > 0) {
-        ver_res = cli_opts.ver_res;
-    }
-    if (cli_opts.dpi > 0) {
-        dpi = cli_opts.dpi;
-    }
-
-    /* Prepare display buffer */
-    const size_t buf_size = hor_res * ver_res / 10; /* At least 1/10 of the display size is recommended */
-    lv_disp_draw_buf_t disp_buf;
-    lv_color_t *buf = (lv_color_t *)malloc(buf_size * sizeof(lv_color_t));
-    lv_disp_draw_buf_init(&disp_buf, buf, NULL, buf_size);
-
-    /* Register display driver */
-    disp_drv.draw_buf = &disp_buf;
-    disp_drv.hor_res = hor_res;
-    disp_drv.ver_res = ver_res;
-    disp_drv.offset_x = cli_opts.x_offset;
-    disp_drv.offset_y = cli_opts.y_offset;
-    disp_drv.dpi = dpi;
-    lv_disp_drv_register(&disp_drv);
-
-    /* Connect input devices */
-    ul_indev_auto_connect(conf_opts.input.keyboard, conf_opts.input.pointer, conf_opts.input.touchscreen);
-    ul_indev_set_up_mouse_cursor();
-
-    /* Initialise theme */
-    set_theme(is_alternate_theme);
-
-    /* Prevent scrolling when keyboard is off-screen */
-    lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
-
-    /* Figure out a few numbers for sizing and positioning */
-    const int keyboard_height = ver_res > hor_res ? ver_res / 3 : ver_res / 2;
-    const int padding = keyboard_height / 8;
-    const int label_width = hor_res - 2 * padding;
-
-    /* Main flexbox */
-    lv_obj_t *container = lv_obj_create(lv_scr_act());
-    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_size(container, LV_PCT(100), ver_res - keyboard_height);
-    lv_obj_set_pos(container, 0, 0);
-    lv_obj_set_style_pad_row(container, padding, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(container, padding, LV_PART_MAIN);
-
-    /* Label container */
-    lv_obj_t *label_container = lv_obj_create(container);
-    lv_obj_set_size(label_container, label_width, LV_PCT(100));
-    lv_obj_set_flex_grow(label_container, 1);
-
-    /* FuriOS label container */
-    lv_obj_t *furios_label_container = lv_obj_create(lv_scr_act());
-    lv_obj_set_width(furios_label_container, LV_PCT(100));
-    lv_obj_set_height(furios_label_container, LV_SIZE_CONTENT);
-    lv_obj_set_align(furios_label_container, LV_ALIGN_BOTTOM_MID);
-
-    /* FuriOS label text */
-    lv_obj_t *furios_label = lv_label_create(furios_label_container);
-    lv_label_set_text(furios_label, "FuriOS Recovery");
-    lv_obj_align(furios_label, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-    /* Initialize images */
-    for (int i = 0; i < NUM_IMAGES; i++)
-        images[i] = lv_img_create(lv_scr_act());
-
-    /* Furi Labs logo */
-    lv_obj_align(images[0], LV_ALIGN_TOP_MID, 0, 100);
-
-    /* Set image mode */
-    update_image_mode(is_alternate_theme);
-
+static void create_buttons(lv_obj_t *label_container) {
     /* Reboot button */
     reboot_btn = lv_btn_create(label_container);
     lv_obj_set_width(reboot_btn, LV_PCT(100));
@@ -1041,6 +1028,17 @@ int main(int argc, char *argv[]) {
     lv_obj_set_flex_flow(theme_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(theme_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
+    /* Terminal button */
+    terminal_btn = lv_btn_create(label_container);
+    lv_obj_set_width(terminal_btn, LV_PCT(100));
+    lv_obj_set_height(terminal_btn, 100);
+    lv_obj_t *terminal_btn_label = lv_label_create(terminal_btn);
+    lv_label_set_text(terminal_btn_label, "Terminal");
+    lv_obj_add_event_cb(terminal_btn, terminal_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 900);
+    lv_obj_set_flex_flow(terminal_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(terminal_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
     /* SSH button */
     ssh_btn = lv_btn_create(label_container);
     lv_obj_set_width(ssh_btn, LV_PCT(100));
@@ -1048,16 +1046,176 @@ int main(int argc, char *argv[]) {
     ssh_btn_label = lv_label_create(ssh_btn);
 
     struct stat buffer;
-    if (stat("/tmp/dropbear-enabled", &buffer) == 0) {
+    if (stat("/tmp/dropbear-enabled", &buffer) == 0)
         lv_label_set_text(ssh_btn_label, "Disable SSH");
-    } else {
+    else
         lv_label_set_text(ssh_btn_label, "Enable SSH");
-    }
 
     lv_obj_add_event_cb(ssh_btn, toggle_ssh_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 900);
+    lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1000);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+}
+
+static void create_ui(uint32_t hor_res, uint32_t ver_res) {
+    /* Clear the screen */
+    lv_obj_clean(lv_scr_act());
+
+    /* Prevent scrolling when keyboard is off-screen */
+    lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Figure out a few numbers for sizing and positioning */
+    const int keyboard_height = ver_res > hor_res ? ver_res / 3 : ver_res / 2;
+    const int padding = keyboard_height / 8;
+    const int label_width = hor_res - 2 * padding;
+
+    /* Main flexbox */
+    lv_obj_t *container = lv_obj_create(lv_scr_act());
+    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(container, LV_PCT(100), ver_res - keyboard_height);
+    lv_obj_set_pos(container, 0, 0);
+    lv_obj_set_style_pad_row(container, padding, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(container, padding, LV_PART_MAIN);
+
+    /* Label container */
+    lv_obj_t *label_container = lv_obj_create(container);
+    lv_obj_set_size(label_container, label_width, LV_PCT(100));
+    lv_obj_set_flex_grow(label_container, 1);
+
+    /* FuriOS label container */
+    lv_obj_t *furios_label_container = lv_obj_create(lv_scr_act());
+    lv_obj_set_width(furios_label_container, LV_PCT(100));
+    lv_obj_set_height(furios_label_container, LV_SIZE_CONTENT);
+    lv_obj_set_align(furios_label_container, LV_ALIGN_BOTTOM_MID);
+
+    /* FuriOS label text */
+    lv_obj_t *furios_label = lv_label_create(furios_label_container);
+    lv_label_set_text(furios_label, "FuriOS Recovery");
+    lv_obj_align(furios_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    /* Initialize images */
+    for (int i = 0; i < NUM_IMAGES; i++)
+        images[i] = lv_img_create(lv_scr_act());
+
+    /* Furi Labs logo */
+    lv_obj_align(images[0], LV_ALIGN_TOP_MID, 0, 100);
+
+    /* Set image mode */
+    update_image_mode(is_alternate_theme);
+
+    /* Create buttons */
+    create_buttons(label_container);
+}
+
+static void initialize_recovery_ui(void) {
+    /* Initialise LVGL and set up logging callback */
+    lv_init();
+
+    lv_log_register_print_cb(ul_log_print_cb);
+
+    /* Initialise display driver */
+    static lv_disp_drv_t disp_drv;
+    lv_disp_drv_init(&disp_drv);
+
+    /* Initialise framebuffer driver and query display size */
+    uint32_t hor_res = 0;
+    uint32_t ver_res = 0;
+    uint32_t dpi = 0;
+
+    switch (conf_opts.general.backend) {
+#if USE_FBDEV
+    case UL_BACKENDS_BACKEND_FBDEV:
+        fbdev_init();
+        fbdev_get_sizes(&hor_res, &ver_res, &dpi);
+        disp_drv.flush_cb = fbdev_flush;
+        break;
+#endif /* USE_FBDEV */
+#if USE_DRM
+    case UL_BACKENDS_BACKEND_DRM:
+        drm_init();
+        drm_get_sizes((lv_coord_t *)&hor_res, (lv_coord_t *)&ver_res, &dpi);
+        disp_drv.flush_cb = drm_flush;
+        break;
+#endif /* USE_DRM */
+#if USE_MINUI
+    case UL_BACKENDS_BACKEND_MINUI:
+        minui_init();
+        minui_get_sizes(&hor_res, &ver_res, &dpi);
+        disp_drv.flush_cb = minui_flush;
+        break;
+#endif /* USE_MINUI */
+    default:
+        ul_log(UL_LOG_LEVEL_ERROR, "Unable to find suitable backend");
+        exit(EXIT_FAILURE);
+    }
+
+    /* Override display parameters with command line options if necessary */
+    if (cli_opts.hor_res > 0)
+        hor_res = cli_opts.hor_res;
+    if (cli_opts.ver_res > 0)
+        ver_res = cli_opts.ver_res;
+    if (cli_opts.dpi > 0)
+        dpi = cli_opts.dpi;
+
+    /* Prepare display buffer */
+    const size_t buf_size = hor_res * ver_res / 10; /* At least 1/10 of the display size is recommended */
+    if (buf == NULL)
+        buf = (lv_color_t *)malloc(buf_size * sizeof(lv_color_t));
+
+    lv_disp_draw_buf_init(&disp_buf, buf, NULL, buf_size);
+
+    /* Register display driver */
+    disp_drv.draw_buf = &disp_buf;
+    disp_drv.hor_res = hor_res;
+    disp_drv.ver_res = ver_res;
+    disp_drv.offset_x = cli_opts.x_offset;
+    disp_drv.offset_y = cli_opts.y_offset;
+    disp_drv.dpi = dpi;
+    lv_disp_drv_register(&disp_drv);
+
+    printf("Display resolution: %dx%d, DPI: %d, Offset: (%d, %d)\n",
+           hor_res, ver_res, dpi, cli_opts.x_offset, cli_opts.y_offset);
+
+    /* Connect input devices */
+    ul_indev_auto_connect(conf_opts.input.keyboard, conf_opts.input.pointer, conf_opts.input.touchscreen);
+    ul_indev_set_up_mouse_cursor();
+
+    /* Initialise theme */
+    set_theme(is_alternate_theme);
+
+    /* Create UI elements */
+    create_ui(hor_res, ver_res);
+}
+
+/**
+ * Main
+ */
+
+int main(int argc, char *argv[]) {
+    /* Parse command line options */
+    ul_cli_parse_opts(argc, argv, &cli_opts);
+
+    /* Set up log level */
+    if (cli_opts.verbose) {
+        ul_log_set_level(UL_LOG_LEVEL_VERBOSE);
+    }
+
+    /* Announce ourselves */
+    ul_log(UL_LOG_LEVEL_VERBOSE, "furios-recovery %s", UL_VERSION);
+
+    /* Parse config files */
+    ul_config_parse(cli_opts.config_files, cli_opts.num_config_files, &conf_opts);
+
+    /* Prepare current TTY and clean up on termination */
+    ul_terminal_prepare_current_terminal();
+    struct sigaction action;
+    memset(&action, 0, sizeof(action));
+    action.sa_handler = sigaction_handler;
+    sigaction(SIGINT, &action, NULL);
+    sigaction(SIGTERM, &action, NULL);
+
+    initialize_recovery_ui();
 
     /* Run lvgl in "tickless" mode */
     while(1) {
@@ -1075,7 +1233,7 @@ int main(int argc, char *argv[]) {
 
 /**
  * Generate tick for LVGL.
- * 
+ *
  * @return tick in ms
  */
 uint32_t ul_get_tick(void) {
