@@ -251,7 +251,12 @@ static void check_password(lv_obj_t *textarea);
 static void factory_reset_password(lv_timer_t *timer);
 
 /**
- * Factory resets the device
+ * Returns current slot suffix from cmdline
+ */
+static char* get_slot_suffix(void);
+
+/**
+ * Drop all caches on device
  */
 static int drop_caches(void);
 
@@ -527,6 +532,31 @@ static void factory_reset_password(lv_timer_t *timer) {
     }
 }
 
+static char* get_slot_suffix() {
+    FILE* cmdline = fopen("/proc/cmdline", "r");
+    if (cmdline == NULL) {
+        perror("Error opening /proc/cmdline");
+        return NULL;
+    }
+
+    char buffer[1024];
+    char* result = NULL;
+    if (fgets(buffer, sizeof(buffer), cmdline) != NULL) {
+        char* token = strstr(buffer, "androidboot.slot_suffix=");
+        if (token != NULL) {
+            token += strlen("androidboot.slot_suffix=");
+            result = malloc(3 * sizeof(char));
+            if (result != NULL) {
+                strncpy(result, token, 2);
+                result[2] = '\0';
+            }
+        }
+    }
+
+    fclose(cmdline);
+    return result;
+}
+
 static int drop_caches() {
     int fd = open("/proc/sys/vm/drop_caches", O_WRONLY);
     if (fd == -1) {
@@ -550,6 +580,12 @@ static int factory_reset(void) {
     struct stat buffer;
     int result;
     char cmd[256];
+    char* slot_suffix = get_slot_suffix();
+
+    // If no slot suffix is found, default to an empty string so that single slot devices can work
+    if (slot_suffix == NULL) {
+        slot_suffix = strdup("");
+    }
 
     drop_caches(); // tar will fill up cache, has to be cleared before writing
 
@@ -569,16 +605,19 @@ static int factory_reset(void) {
         result = mount("/dev/mapper/dynpart-system_a", "/system_mnt", "ext4", 0, NULL);
         if (result != 0) {
             printf("Failed to mount dynpart-system_a\n");
+            free(slot_suffix);
             return -1;
         }
     } else if (stat("/dev/mapper/dynpart-system_b", &buffer) == 0) {
         result = mount("/dev/mapper/dynpart-system_b", "/system_mnt", "ext4", 0, NULL);
         if (result != 0) {
             printf("Failed to mount dynpart-system_b\n");
+            free(slot_suffix);
             return -1;
         }
     } else {
         printf("Failed to mount dynpart-system, block device doesn't not exist\n");
+        free(slot_suffix);
         return -1;
     }
 
@@ -589,6 +628,7 @@ static int factory_reset(void) {
     } else {
         printf("Failed to find userdata archive\n");
         umount("/system_mnt");
+        free(slot_suffix);
         return -1;
     }
 
@@ -596,13 +636,37 @@ static int factory_reset(void) {
     if (result != 0) {
         printf("Failed to extract and write userdata\n");
         umount("/system_mnt");
+        free(slot_suffix);
         return -1;
     }
 
+    if (stat("/system_mnt/boot.img", &buffer) == 0) {
+        snprintf(cmd, sizeof(cmd), "dd if=/system_mnt/boot.img of=/dev/disk/by-partlabel/boot%s bs=4M", slot_suffix);
+        result = system(cmd);
+        if (result != 0) {
+            printf("Failed to flash boot image%s%s\n",
+                   *slot_suffix ? " to slot suffix " : "",
+                   *slot_suffix ? slot_suffix : "");
+        }
+    } else {
+        printf("Failed to find boot image\n");
+    }
+
+    if (stat("/system_mnt/dtbo.img", &buffer) == 0) {
+        snprintf(cmd, sizeof(cmd), "dd if=/system_mnt/dtbo.img of=/dev/disk/by-partlabel/dtbo%s bs=4M", slot_suffix);
+        result = system(cmd);
+        if (result != 0) {
+            printf("Failed to flash dtbo image%s%s\n",
+                   *slot_suffix ? " to slot suffix " : "",
+                   *slot_suffix ? slot_suffix : "");
+        }
+    } else {
+        printf("Failed to find dtbo image\n");
+    }
+
     umount("/system_mnt");
-
     drop_caches();
-
+    free(slot_suffix);
     return 0;
 }
 
