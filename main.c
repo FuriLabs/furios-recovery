@@ -52,6 +52,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 
 #include <sys/reboot.h>
 #include <sys/time.h>
@@ -60,6 +61,9 @@
 #include <sys/wait.h>
 
 #define NUM_IMAGES 1
+#define MIN_BRIGHTNESS 5
+#define BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/brightness"
+#define MAX_BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/max_brightness"
 
 /**
  * Static variables
@@ -85,6 +89,7 @@ lv_obj_t *theme_btn;
 lv_obj_t *ssh_btn;
 lv_obj_t *ssh_btn_label;
 lv_obj_t *terminal_btn;
+lv_obj_t *brightness_slider;
 
 LV_IMG_DECLARE(furilabs_white)
 LV_IMG_DECLARE(furilabs_black)
@@ -179,6 +184,13 @@ static void set_keyboard_hidden(bool is_hidden);
  * @param value y position
  */
 static void keyboard_anim_y_cb(void *obj, int32_t value);
+
+/**
+ * Callback for the brightness slider
+ *
+ * @param event the event object
+ */
+static void brightness_slider_changed_cb(lv_event_t *event);
 
 /**
  * Handle LV_EVENT_CLICKED events from the shutdown button.
@@ -320,6 +332,22 @@ static void open_terminal(void);
 static void sigaction_handler(int signum);
 
 /**
+ * Read a value from given path and return the value
+ *
+ * @paran path is the path of the file
+ * @param default_value is the default value if there was an error
+ */
+static int read_int_from_file(const char *path, int default_value);
+
+/**
+ * Write a value to a given path
+ *
+ * @paran path is the path of the file
+ * @param value is the value requeted for writing
+ */
+static int write_int_to_file(const char *path, int value);
+
+/**
  * Create all buttons in the label container
  *
  * @param label container to create buttons in
@@ -407,6 +435,18 @@ static void set_keyboard_hidden(bool is_hidden) {
 
 static void keyboard_anim_y_cb(void *obj, int32_t value) {
     lv_obj_set_y(obj, value);
+}
+
+static void brightness_slider_changed_cb(lv_event_t *event) {
+    lv_obj_t *slider = lv_event_get_target(event);
+    int32_t value = lv_slider_get_value(slider);
+
+    if (value < MIN_BRIGHTNESS) {
+        value = MIN_BRIGHTNESS;
+        lv_slider_set_value(slider, value, LV_ANIM_OFF);
+    }
+
+    write_int_to_file(BRIGHTNESS_PATH, value);
 }
 
 static void shutdown_btn_clicked_cb(lv_event_t *event) {
@@ -983,7 +1023,89 @@ static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
     }
 }
 
+static int read_int_from_file(const char *path, int default_value) {
+    FILE *file = fopen(path, "r");
+    if (file == NULL) {
+        printf("File not found: %s\n", path);
+        return default_value;
+    }
+
+    char buffer[20];
+    if (fgets(buffer, sizeof(buffer), file) != NULL) {
+        fclose(file);
+        buffer[strcspn(buffer, "\n")] = 0;
+
+        char *endptr;
+        long value = strtol(buffer, &endptr, 10);
+        if (*endptr == '\0' && value >= 0) {
+            return (int)value;
+        }
+    }
+
+    fclose(file);
+    return default_value;
+}
+
+static int write_int_to_file(const char *path, int value) {
+    FILE *file = fopen(path, "w");
+    if (file == NULL) {
+        printf("Failed to open file for writing: %s (Error: %s)\n", path, strerror(errno));
+        return -1;
+    }
+
+    int result = fprintf(file, "%d", value);
+    fclose(file);
+
+    if (result < 0) {
+        printf("Failed to write to file: %s (Error: %s)\n", path, strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+
 static void create_buttons(lv_obj_t *label_container) {
+    /* Brightness slider */
+    brightness_slider = lv_slider_create(label_container);
+    lv_obj_set_width(brightness_slider, LV_PCT(100));
+    lv_obj_set_height(brightness_slider, 20);
+
+    int max_brightness = read_int_from_file(MAX_BRIGHTNESS_PATH, 255);
+    lv_slider_set_range(brightness_slider, 0, max_brightness);
+
+    int current_brightness = read_int_from_file(BRIGHTNESS_PATH, max_brightness);
+    lv_slider_set_value(brightness_slider, current_brightness, LV_ANIM_OFF);
+
+    lv_obj_add_event_cb(brightness_slider, brightness_slider_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, 520);
+
+    static lv_style_t style_slider;
+    lv_style_init(&style_slider);
+    lv_style_set_bg_color(&style_slider, lv_color_hex(0x888888));
+    lv_style_set_bg_opa(&style_slider, LV_OPA_100);
+    lv_obj_add_style(brightness_slider, &style_slider, LV_PART_MAIN);
+
+    static lv_style_t style_indicator;
+    lv_style_init(&style_indicator);
+    lv_style_set_bg_color(&style_indicator, lv_color_hex(0x00ff00));
+    lv_style_set_bg_opa(&style_indicator, LV_OPA_100);
+    lv_obj_add_style(brightness_slider, &style_indicator, LV_PART_INDICATOR);
+
+    static lv_style_t style_knob;
+    lv_style_init(&style_knob);
+    lv_style_set_bg_color(&style_knob, lv_color_hex(0xffffff));
+    lv_style_set_bg_opa(&style_knob, LV_OPA_100);
+    lv_style_set_border_color(&style_knob, lv_color_hex(0x000000));
+    lv_style_set_border_width(&style_knob, 2);
+    lv_style_set_radius(&style_knob, LV_RADIUS_CIRCLE);
+    lv_style_set_pad_all(&style_knob, 5);
+    lv_obj_add_style(brightness_slider, &style_knob, LV_PART_KNOB);
+
+    /* Brightness label */
+    lv_obj_t *brightness_label = lv_label_create(label_container);
+    lv_label_set_text(brightness_label, "Brightness control");
+    lv_obj_align_to(brightness_label, brightness_slider, LV_ALIGN_OUT_TOP_MID, 0, -10);
+
     /* Reboot button */
     reboot_btn = lv_btn_create(label_container);
     lv_obj_set_width(reboot_btn, LV_PCT(100));
@@ -991,7 +1113,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_t *reboot_btn_label = lv_label_create(reboot_btn);
     lv_label_set_text(reboot_btn_label, "Reboot");
     lv_obj_add_event_cb(reboot_btn, reboot_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, 500);
+    lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, 600);
     lv_obj_set_flex_flow(reboot_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(reboot_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1002,7 +1124,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_t *shutdown_btn_label = lv_label_create(shutdown_btn);
     lv_label_set_text(shutdown_btn_label, "Shutdown");
     lv_obj_add_event_cb(shutdown_btn, shutdown_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(shutdown_btn, LV_ALIGN_TOP_MID, 0, 600);
+    lv_obj_align(shutdown_btn, LV_ALIGN_TOP_MID, 0, 700);
     lv_obj_set_flex_flow(shutdown_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(shutdown_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1013,7 +1135,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_t *factory_reset_btn_label = lv_label_create(factory_reset_btn);
     lv_label_set_text(factory_reset_btn_label, "Factory Reset");
     lv_obj_add_event_cb(factory_reset_btn, factory_reset_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(factory_reset_btn, LV_ALIGN_TOP_MID, 0, 700);
+    lv_obj_align(factory_reset_btn, LV_ALIGN_TOP_MID, 0, 800);
     lv_obj_set_flex_flow(factory_reset_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(factory_reset_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1024,7 +1146,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_t *theme_btn_label = lv_label_create(theme_btn);
     lv_label_set_text(theme_btn_label, "Toggle Theme");
     lv_obj_add_event_cb(theme_btn, toggle_theme_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(theme_btn, LV_ALIGN_TOP_MID, 0, 800);
+    lv_obj_align(theme_btn, LV_ALIGN_TOP_MID, 0, 900);
     lv_obj_set_flex_flow(theme_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(theme_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1035,7 +1157,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_t *terminal_btn_label = lv_label_create(terminal_btn);
     lv_label_set_text(terminal_btn_label, "Terminal");
     lv_obj_add_event_cb(terminal_btn, terminal_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 900);
+    lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 1000);
     lv_obj_set_flex_flow(terminal_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(terminal_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
@@ -1052,7 +1174,7 @@ static void create_buttons(lv_obj_t *label_container) {
         lv_label_set_text(ssh_btn_label, "Enable SSH");
 
     lv_obj_add_event_cb(ssh_btn, toggle_ssh_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1000);
+    lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1100);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 }
