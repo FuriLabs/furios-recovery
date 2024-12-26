@@ -80,6 +80,9 @@ bool is_alternate_theme = true;
 bool is_password_obscured = true;
 bool is_keyboard_hidden = true;
 
+bool enabling_ssh = false;
+
+/* Main page */
 lv_obj_t *keyboard = NULL;
 lv_obj_t *ip_label_container = NULL;
 lv_obj_t *ip_label = NULL;
@@ -91,6 +94,15 @@ lv_obj_t *ssh_btn;
 lv_obj_t *ssh_btn_label;
 lv_obj_t *terminal_btn;
 lv_obj_t *brightness_slider;
+
+/* Decryption page */
+lv_obj_t *decrypt_container = NULL;
+lv_obj_t *label_container = NULL;
+lv_obj_t *spangroup = NULL;
+lv_obj_t *textarea_container = NULL;
+lv_obj_t *textarea = NULL;
+lv_obj_t *toggle_pw_btn = NULL;
+lv_obj_t *toggle_kb_btn = NULL;
 
 LV_IMG_DECLARE(furilabs_white)
 LV_IMG_DECLARE(furilabs_black)
@@ -120,6 +132,11 @@ static void toggle_theme_btn_clicked_cb(lv_event_t *event);
  * @param event the event object
  */
 static void toggle_ssh_btn_clicked_cb(lv_event_t *event);
+
+/**
+ * Enable or disable SSH access
+ */
+static void enable_ssh(void);
 
 /**
  * Toggle between the light and dark theme.
@@ -272,11 +289,18 @@ static void keyboard_value_changed_cb(lv_event_t *event);
 static void textarea_ready_cb(lv_event_t *event);
 
 /**
- * Check password against LVM
+ * Check password against LVM for SSH access
  *
  * @param textarea the textarea widget
  */
-static void check_password(lv_obj_t *textarea);
+static void check_password_enable_ssh(lv_obj_t *textarea);
+
+/**
+ * Check password against LVM for factory reset
+ *
+ * @param textarea the textarea widget
+ */
+static void check_password_factory_reset(lv_obj_t *textarea);
 
 /**
  * Handle LV_EVENT_CLICKED events from the password check
@@ -297,6 +321,11 @@ static int drop_caches(void);
  * Factory resets the device
  */
 static int factory_reset(void);
+
+/**
+ * Restores the screen from the decryption page
+ */
+static void restore_main_screen(void);
 
 /**
  * Decrypts the device
@@ -542,6 +571,7 @@ static void perform_factory_reset(lv_timer_t *timer) {
         lv_obj_center(fail_mbox);
     } else {
         if (result == 1) {
+            enabling_ssh = false;
             decrypt(); // Decrypt LVM if necessary
             lv_msgbox_close(resetting_mbox);
             return;
@@ -594,15 +624,36 @@ static void keyboard_value_changed_cb(lv_event_t *event) {
 }
 
 static void textarea_ready_cb(lv_event_t *event) {
-    check_password(lv_event_get_target(event));
+    if (enabling_ssh) {
+        check_password_enable_ssh(lv_event_get_target(event));
+    } else {
+        check_password_factory_reset(lv_event_get_target(event));
+    }
 }
 
-static void check_password(lv_obj_t *textarea) {
+static void check_password_enable_ssh(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
-
     static int attempt_count = 0;
-
     int result = mount_luks_lvm_droidian_helper(password);
+
+    if (result == EXIT_SUCCESS) {
+        enable_ssh();
+        restore_main_screen();
+    } else if (result == 2) {
+        attempt_count++;
+        if (attempt_count >= 3) {
+            lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempt reached.", NULL, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_center(error_mbox);
+        }
+    }
+}
+
+static void check_password_factory_reset(lv_obj_t *textarea) {
+    const char *password = lv_textarea_get_text(textarea);
+    static int attempt_count = 0;
+    int result = mount_luks_lvm_droidian_helper(password);
+
     if (result == EXIT_SUCCESS) {
         lv_obj_t *resetting_mbox = lv_msgbox_create(NULL, NULL, "Resetting device...", NULL, false);
         lv_obj_set_size(resetting_mbox, 400, LV_SIZE_CONTENT);
@@ -873,6 +924,36 @@ static int factory_reset(void) {
     return 0;
 }
 
+static void restore_main_screen(void) {
+    /* Show all main window widgets */
+    lv_obj_clear_flag(reboot_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(shutdown_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(factory_reset_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
+
+    /* Delete all decrypt screen elements */
+    if (decrypt_container != NULL) {
+        lv_obj_del(decrypt_container);
+        decrypt_container = NULL;
+        label_container = NULL;
+        spangroup = NULL;
+        textarea_container = NULL;
+        textarea = NULL;
+        toggle_pw_btn = NULL;
+        toggle_kb_btn = NULL;
+    }
+
+    if (keyboard != NULL) {
+        lv_obj_del(keyboard);
+        keyboard = NULL;
+    }
+
+    /* Re-enable scrolling on main screen */
+    lv_obj_add_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+}
+
 static void decrypt(void) {
     uint32_t hor_res = 0;
     uint32_t ver_res = 0;
@@ -919,28 +1000,31 @@ static void decrypt(void) {
     lv_obj_add_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* Main flexbox */
-    lv_obj_t *container = lv_obj_create(lv_scr_act());
-    lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_size(container, LV_PCT(100), ver_res - keyboard_height);
-    lv_obj_set_pos(container, 0, 0);
-    lv_obj_set_style_pad_row(container, padding, LV_PART_MAIN);
-    lv_obj_set_style_pad_bottom(container, padding, LV_PART_MAIN);
+    decrypt_container = lv_obj_create(lv_scr_act());
+    lv_obj_set_flex_flow(decrypt_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(decrypt_container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(decrypt_container, LV_PCT(100), ver_res - keyboard_height);
+    lv_obj_set_pos(decrypt_container, 0, 0);
+    lv_obj_set_style_pad_row(decrypt_container, padding, LV_PART_MAIN);
+    lv_obj_set_style_pad_bottom(decrypt_container, padding, LV_PART_MAIN);
 
     /* Label container */
-    lv_obj_t *label_container = lv_obj_create(container);
+    label_container = lv_obj_create(decrypt_container);
     lv_obj_set_size(label_container, label_width, LV_PCT(100));
     lv_obj_set_flex_grow(label_container, 1);
 
     /* Label */
-    lv_obj_t *spangroup = lv_spangroup_create(label_container);
+    spangroup = lv_spangroup_create(label_container);
     lv_spangroup_set_align(spangroup, LV_TEXT_ALIGN_CENTER);
     lv_spangroup_set_mode(spangroup, LV_SPAN_MODE_BREAK);
     lv_spangroup_set_overflow(spangroup, LV_SPAN_OVERFLOW_ELLIPSIS);
     lv_span_t *span1 = lv_spangroup_new_span(spangroup);
 
     /* Label text */
-    lv_span_set_text(span1, "Password required for factory reset");
+    const char *label_text = enabling_ssh ?
+        "Password required for SSH access" :
+        "Password required for factory reset";
+    lv_span_set_text(span1, label_text);
 
     /* Size label to content */
     const lv_coord_t label_height = lv_spangroup_get_expand_height(spangroup, label_width);
@@ -949,7 +1033,7 @@ static void decrypt(void) {
     lv_obj_set_align(spangroup, LV_ALIGN_BOTTOM_MID);
 
     /* Textarea flexbox */
-    lv_obj_t *textarea_container = lv_obj_create(container);
+    textarea_container = lv_obj_create(decrypt_container);
     lv_obj_set_size(textarea_container, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_style_max_width(textarea_container, textarea_container_max_width, LV_PART_MAIN);
     lv_obj_set_flex_flow(textarea_container, LV_FLEX_FLOW_ROW);
@@ -958,7 +1042,7 @@ static void decrypt(void) {
     lv_obj_set_style_pad_right(textarea_container, padding, LV_PART_MAIN);
 
     /* Textarea */
-    lv_obj_t *textarea = lv_textarea_create(textarea_container);
+    textarea = lv_textarea_create(textarea_container);
     lv_textarea_set_one_line(textarea, true);
     lv_textarea_set_password_mode(textarea, true);
     lv_textarea_set_password_bullet(textarea, conf_opts.textarea.bullet);
@@ -971,7 +1055,7 @@ static void decrypt(void) {
     ul_indev_set_up_textarea_for_keyboard_input(textarea);
 
     /* Reveal / obscure password button */
-    lv_obj_t *toggle_pw_btn = lv_btn_create(textarea_container);
+    toggle_pw_btn = lv_btn_create(textarea_container);
     const int textarea_height = lv_obj_get_height(textarea);
     lv_obj_set_size(toggle_pw_btn, textarea_height, textarea_height);
     lv_obj_t *toggle_pw_btn_label = lv_label_create(toggle_pw_btn);
@@ -980,14 +1064,14 @@ static void decrypt(void) {
     lv_obj_add_event_cb(toggle_pw_btn, toggle_pw_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     /* Show / hide keyboard button */
-    lv_obj_t *toggle_kb_btn = lv_btn_create(textarea_container);
+    toggle_kb_btn = lv_btn_create(textarea_container);
     lv_obj_set_size(toggle_kb_btn, textarea_height, textarea_height);
     lv_obj_add_event_cb(toggle_kb_btn, toggle_kb_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toggle_kb_btn_label = lv_label_create(toggle_kb_btn);
     lv_label_set_text(toggle_kb_btn_label, LV_SYMBOL_KEYBOARD);
     lv_obj_center(toggle_kb_btn_label);
 
-    /* Hide label if it clips veritcally */
+    /* Hide label if it clips vertically */
     if (label_height > lv_obj_get_height(label_container)) {
         lv_obj_set_height(spangroup, 0);
     }
@@ -1083,8 +1167,7 @@ static void sigaction_handler(int signum) {
     exit(0);
 }
 
-static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
-    LV_UNUSED(event);
+static void enable_ssh() {
     struct stat buffer;
 
     if (stat("/tmp/dropbear-enabled", &buffer) == 0) {
@@ -1115,6 +1198,20 @@ static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
             }
             lv_label_set_text(ssh_btn_label, "Disable SSH");
         }
+    }
+}
+
+static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
+    LV_UNUSED(event);
+
+    const char *lvm_device_path = "/dev/droidian/droidian-reserved";
+    size_t print_bytes = 64;
+    int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
+    if (result == 1) {
+        enabling_ssh = true;
+        decrypt();
+    } else {
+        enable_ssh();
     }
 }
 
