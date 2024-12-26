@@ -52,6 +52,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <errno.h>
 
 #include <sys/reboot.h>
@@ -687,7 +688,9 @@ static int factory_reset(void) {
     // here, we're using pre existing binaries in the ramdisk to not take too much storage in the ramdisk
     struct stat buffer;
     int result;
-    char cmd[256];
+    char cmd[1024];
+    char bootimg_file[256] = "";
+    char dtboimg_file[256] = "";
     char* slot_suffix = get_slot_suffix();
 
     // If no slot suffix is found, default to an empty string so that single slot devices can work
@@ -749,27 +752,119 @@ static int factory_reset(void) {
     }
 
     if (stat("/system_mnt/boot.img", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "dd if=/system_mnt/boot.img of=/dev/disk/by-partlabel/boot%s bs=4M", slot_suffix);
+        snprintf(cmd, sizeof(cmd),
+                 "dd if=/system_mnt/boot.img of=/dev/disk/by-partlabel/boot%s bs=4M",
+                 slot_suffix);
         result = system(cmd);
         if (result != 0) {
             printf("Failed to flash boot image%s%s\n",
                    *slot_suffix ? " to slot suffix " : "",
                    *slot_suffix ? slot_suffix : "");
+        } else {
+            printf("Flashed boot.img from /system_mnt\n");
         }
     } else {
-        printf("Failed to find boot image\n");
+        printf("No /system_mnt/boot.img found.\n");
     }
 
     if (stat("/system_mnt/dtbo.img", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "dd if=/system_mnt/dtbo.img of=/dev/disk/by-partlabel/dtbo%s bs=4M", slot_suffix);
+        snprintf(cmd, sizeof(cmd),
+                 "dd if=/system_mnt/dtbo.img of=/dev/disk/by-partlabel/dtbo%s bs=4M",
+                 slot_suffix);
         result = system(cmd);
         if (result != 0) {
             printf("Failed to flash dtbo image%s%s\n",
                    *slot_suffix ? " to slot suffix " : "",
                    *slot_suffix ? slot_suffix : "");
+        } else {
+            printf("Flashed dtbo.img from /system_mnt\n");
         }
     } else {
-        printf("Failed to find dtbo image\n");
+        printf("No /system_mnt/dtbo.img found.\n");
+    }
+
+    if (stat("/system_mnt/boot.img", &buffer) != 0 ||
+        stat("/system_mnt/dtbo.img", &buffer) != 0) {
+        if (stat("/dev/mapper/droidian-droidian--rootfs", &buffer) == 0) {
+            mkdir("/rootfs_mnt", 0755);
+
+            result = mount("/dev/mapper/droidian-droidian--rootfs", "/rootfs_mnt", "ext4",0, NULL);
+            if (result != 0) {
+                printf("Failed to mount droidian-droidian--rootfs\n");
+                return -1;
+            }
+
+            DIR *dir = opendir("/rootfs_mnt/boot");
+            if (dir == NULL) {
+                printf("Failed to opendir /rootfs_mnt/boot\n");
+                umount("/rootfs_mnt");
+                return -1;
+            }
+
+            struct dirent *entry;
+            while ((entry = readdir(dir)) != NULL) {
+                if (strncmp(entry->d_name, "boot.img", strlen("boot.img")) == 0) {
+                    strncpy(bootimg_file, entry->d_name, sizeof(bootimg_file) - 1);
+                    bootimg_file[sizeof(bootimg_file) - 1] = '\0';
+                    break;
+                }
+            }
+
+            rewinddir(dir);
+            while ((entry = readdir(dir)) != NULL) {
+                if (strncmp(entry->d_name, "dtbo.img", strlen("dtbo.img")) == 0) {
+                    strncpy(dtboimg_file, entry->d_name, sizeof(dtboimg_file) - 1);
+                    dtboimg_file[sizeof(dtboimg_file) - 1] = '\0';
+                    break;
+                }
+            }
+
+            closedir(dir);
+
+            if (bootimg_file[0] != '\0') {
+                char boot_path[512];
+                snprintf(boot_path, sizeof(boot_path), "/rootfs_mnt/boot/%s", bootimg_file);
+
+                snprintf(cmd, sizeof(cmd),
+                         "dd if=\"%s\" of=\"/dev/disk/by-partlabel/boot%s\" bs=4M",
+                         boot_path, slot_suffix);
+
+                result = system(cmd);
+                if (result != 0) {
+                    printf("Failed to flash boot image%s%s\n",
+                           *slot_suffix ? " to slot suffix " : "",
+                           *slot_suffix ? slot_suffix : "");
+                } else {
+                    printf("Flashed boot.img from /rootfs_mnt\n");
+                }
+            } else {
+                printf("Failed to find boot image in the rootfs\n");
+            }
+
+            if (dtboimg_file[0] != '\0') {
+                char dtbo_path[512];
+                snprintf(dtbo_path, sizeof(dtbo_path), "/rootfs_mnt/boot/%s", dtboimg_file);
+
+                snprintf(cmd, sizeof(cmd),
+                         "dd if=\"%s\" of=\"/dev/disk/by-partlabel/dtbo%s\" bs=4M",
+                         dtbo_path, slot_suffix);
+
+                result = system(cmd);
+                if (result != 0) {
+                    printf("Failed to flash dtbo image%s%s\n",
+                           *slot_suffix ? " to slot suffix " : "",
+                           *slot_suffix ? slot_suffix : "");
+                } else {
+                    printf("Flashed dtbo.img from /rootfs_mnt\n");
+                }
+            } else {
+                printf("Failed to find dtbo image in the rootfs\n");
+            }
+
+            umount("/rootfs_mnt");
+        } else {
+            printf("No /system_mnt images found and /dev/mapper/droidian-droidian--rootfs not available.\n");
+        }
     }
 
     umount("/system_mnt");
