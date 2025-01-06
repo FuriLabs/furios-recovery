@@ -24,7 +24,6 @@
 #include "command_line.h"
 #include "config.h"
 #include "indev.h"
-#include "log.h"
 #include "furios-recovery.h"
 #include "terminal.h"
 #include "theme.h"
@@ -976,7 +975,7 @@ static void decrypt(void) {
         break;
 #endif /* USE_MINUI */
     default:
-        ul_log(UL_LOG_LEVEL_ERROR, "Unable to find suitable backend");
+        printf("Unable to find suitable backend\n");
         exit(EXIT_FAILURE);
     }
 
@@ -1426,8 +1425,6 @@ static void initialize_recovery_ui(void) {
     /* Initialise LVGL and set up logging callback */
     lv_init();
 
-    lv_log_register_print_cb(ul_log_print_cb);
-
     /* Initialise display driver */
     static lv_disp_drv_t disp_drv;
     lv_disp_drv_init(&disp_drv);
@@ -1460,7 +1457,7 @@ static void initialize_recovery_ui(void) {
         break;
 #endif /* USE_MINUI */
     default:
-        ul_log(UL_LOG_LEVEL_ERROR, "Unable to find suitable backend");
+        printf("Unable to find suitable backend\n");
         exit(EXIT_FAILURE);
     }
 
@@ -1509,14 +1506,6 @@ static void initialize_recovery_ui(void) {
 int main(int argc, char *argv[]) {
     /* Parse command line options */
     ul_cli_parse_opts(argc, argv, &cli_opts);
-
-    /* Set up log level */
-    if (cli_opts.verbose) {
-        ul_log_set_level(UL_LOG_LEVEL_VERBOSE);
-    }
-
-    /* Announce ourselves */
-    ul_log(UL_LOG_LEVEL_VERBOSE, "furios-recovery %s", UL_VERSION);
 
     /* Parse config files */
     ul_config_parse(cli_opts.config_files, cli_opts.num_config_files, &conf_opts);

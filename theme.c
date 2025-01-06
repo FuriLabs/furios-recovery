@@ -20,12 +20,12 @@
 
 #include "theme.h"
 
-#include "log.h"
 #include "sq2lv_layouts.h"
 #include "furios-recovery.h"
 
 #include "lvgl/lvgl.h"
 
+#include <stdio.h>
 
 /**
  * Static variables
@@ -373,7 +373,7 @@ void ul_theme_prepare_keyboard(lv_obj_t *keyboard) {
 
 void ul_theme_apply(const ul_theme *theme) {
     if (!theme) {
-        ul_log(UL_LOG_LEVEL_ERROR, "Could not apply theme from NULL pointer");
+        printf("Could not apply theme from NULL pointer\n");
         return;
     }
 

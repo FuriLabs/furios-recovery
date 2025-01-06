@@ -21,12 +21,11 @@
 #include "indev.h"
 
 #include "cursor.h"
-#include "log.h"
 
 #include "lv_drivers/indev/libinput_drv.h"
 
 #include <limits.h>
-
+#include <stdio.h>
 
 /**
  * Defines
@@ -132,13 +131,13 @@ static void auto_connect(libinput_capability capability, int max_num_devs, int *
 static void log_connection(libinput_capability capability, char *dev) {
     switch (capability) {
         case LIBINPUT_CAPABILITY_KEYBOARD:
-            ul_log(UL_LOG_LEVEL_VERBOSE, "Connecting keyboard device %s", dev);
+            printf("Connecting keyboard device %s\n", dev);
             break;
         case LIBINPUT_CAPABILITY_POINTER:
-            ul_log(UL_LOG_LEVEL_VERBOSE, "Connecting pointer device %s", dev);
+            printf("Connecting pointer device %s\n", dev);
             break;
         case LIBINPUT_CAPABILITY_TOUCH:
-            ul_log(UL_LOG_LEVEL_VERBOSE, "Connecting touchscreen device %s", dev);
+            printf("Connecting touchscreen device %s\n", dev);
             break;
         case LIBINPUT_CAPABILITY_NONE:
             break;

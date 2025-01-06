@@ -20,11 +20,10 @@
 
 #include "terminal.h"
 
-#include "log.h"
-
 #include <fcntl.h>
 #include <stdbool.h>
 #include <unistd.h>
+#include <stdio.h>
 
 #include <linux/kd.h>
 
@@ -66,10 +65,10 @@ static bool reopen_current_terminal(void) {
     close_current_terminal();
 
     current_fd = open("/dev/tty0", O_RDWR);
-	if (current_fd < 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not open /dev/tty0");
-		return false;
-	}
+    if (current_fd < 0) {
+        printf("Could not open /dev/tty0\n");
+        return false;
+    }
 
     return true;
 }
@@ -92,7 +91,7 @@ void ul_terminal_prepare_current_terminal(void) {
     reopen_current_terminal();
 
     if (current_fd < 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not prepare current terminal");
+        printf("Could not prepare current terminal\n");
         return;
     }
 
@@ -100,25 +99,25 @@ void ul_terminal_prepare_current_terminal(void) {
     // https://gitlab.com/cherrypicker/unl0kr/-/issues/34 for further info.
 
     if (ioctl(current_fd, KDGKBMODE, &original_kb_mode) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not get terminal keyboard mode");
+        printf("Could not get terminal keyboard mode\n");
     }
 
     if (ioctl(current_fd, KDSKBMODE, K_OFF) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not set terminal keyboard mode to off");
+        printf("Could not set terminal keyboard mode to off\n");
     }
 
     if (ioctl(current_fd, KDGETMODE, &original_mode) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not get terminal mode");
+        printf("Could not get terminal mode\n");
     }
 
     if (ioctl(current_fd, KDSETMODE, KD_GRAPHICS) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not set terminal mode to graphics");
+        printf("Could not set terminal mode to graphics\n");
     }
 }
 
 void ul_terminal_reset_current_terminal(void) {
     if (current_fd < 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not reset current terminal");
+        printf("Could not reset current terminal\n");
         return;
     }
 
@@ -126,11 +125,11 @@ void ul_terminal_reset_current_terminal(void) {
     // https://gitlab.com/cherrypicker/unl0kr/-/issues/34 for further info.
 
     if (ioctl(current_fd, KDSETMODE, original_mode) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not reset terminal mode");
+        printf("Could not reset terminal mode\n");
     }
 
     if (ioctl(current_fd, KDSKBMODE, original_kb_mode) != 0) {
-        ul_log(UL_LOG_LEVEL_WARNING, "Could not reset terminal keyboard mode");
+        printf("Could not reset terminal keyboard mode\n");
     }
 
     close_current_terminal();

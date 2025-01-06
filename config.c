@@ -20,8 +20,6 @@
 
 #include "config.h"
 
-#include "log.h"
-
 #include "lvgl/lvgl.h"
 
 #include <ini.h>
@@ -92,7 +90,7 @@ static void init_opts(ul_config_opts *opts) {
 
 static void parse_file(const char *path, ul_config_opts *opts) {
     if (ini_parse(path, parsing_handler, opts) != 0) {
-        ul_log(UL_LOG_LEVEL_ERROR, "Ignoring invalid config file %s", path);
+        printf("Ignoring invalid config file %s\n", path);
     }
 }
 
@@ -173,7 +171,7 @@ static int parsing_handler(void* user_data, const char* section, const char* key
         }
     }
 
-    ul_log(UL_LOG_LEVEL_ERROR, "Ignoring invalid config value \"%s\" for key \"%s\" in section \"%s\"", value, key, section);
+    printf("Ignoring invalid config value \"%s\" for key \"%s\" in section \"%s\"\n", value, key, section);
     return 1; /* Return 1 (true) so that we can use the return value of ini_parse exclusively for file-level errors (e.g. file not found) */
 }
 

@@ -21,6 +21,7 @@
 #include "backends.h"
 
 #include <string.h>
+#include <stdio.h>
 
 /**
  * Public interface
@@ -42,10 +43,10 @@ const char *ul_backends_backends[] = {
 ul_backends_backend_id_t ul_backends_find_backend_with_name(const char *name) {
     for (int i = 0; ul_backends_backends[i] != NULL; ++i) {
         if (strcmp(ul_backends_backends[i], name) == 0) {
-            ul_log(UL_LOG_LEVEL_VERBOSE, "Found backend: %s\n", name);
+            printf("Found backend: %s\n", name);
             return i;
         }
     }
-    ul_log(UL_LOG_LEVEL_WARNING, "Backend %s not found\n", name);
+    printf("Backend %s not found\n", name);
     return UL_BACKENDS_BACKEND_NONE;
 }

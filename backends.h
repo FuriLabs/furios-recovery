@@ -23,8 +23,6 @@
 
 #include "lv_drv_conf.h"
 
-#include "log.h"
-
 /* NOTE: Only UL_BACKENDS_BACKEND_NONE is ought to have an explicit value assigned */
 typedef enum {
     UL_BACKENDS_BACKEND_NONE = -1,
