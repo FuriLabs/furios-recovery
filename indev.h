@@ -18,8 +18,8 @@
  */
 
 
-#ifndef UL_INDEV_H
-#define UL_INDEV_H
+#ifndef INDEV_H
+#define INDEV_H
 
 #include "lvgl/lvgl.h"
 
@@ -32,25 +32,25 @@
  * @param pointer if true, auto-connect pointer devices
  * @param touchscreen if true, auto-connect touchscreen devices
  */
-void ul_indev_auto_connect(bool keyboard, bool pointer, bool touchscreen);
+void indev_auto_connect(bool keyboard, bool pointer, bool touchscreen);
 
 /**
  * Check if any keyboard devices are connected.
  *
  * @return true if at least one keyboard device is connected, false otherwise
  */
-bool ul_indev_is_keyboard_connected();
+bool indev_is_keyboard_connected();
 
 /**
  * Set up an LVGL text area to receive input from currently connected keyboard devices.
  * 
  * @param textarea textarea widget
  */
-void ul_indev_set_up_textarea_for_keyboard_input(lv_obj_t *textarea);
+void indev_set_up_textarea_for_keyboard_input(lv_obj_t *textarea);
 
 /**
  * Set up the mouse cursor image for currently connected pointer devices.
  */
-void ul_indev_set_up_mouse_cursor();
+void indev_set_up_mouse_cursor();
 
-#endif /* UL_INDEV_H */
+#endif /* INDEV_H */

@@ -18,15 +18,15 @@
  */
 
 
-#ifndef UL_THEME_H
-#define UL_THEME_H
+#ifndef THEME_H
+#define THEME_H
 
 #include "lvgl/lvgl.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 
-#define UL_WIDGET_HEADER LV_OBJ_FLAG_USER_1
+#define WIDGET_HEADER LV_OBJ_FLAG_USER_1
 
 /**
  * Theming structs
@@ -35,7 +35,7 @@
 /* Window theme */
 typedef struct {
     uint32_t bg_color;
-} ul_theme_window;
+} theme_window;
 
 /* Header theme */
 typedef struct {
@@ -44,30 +44,30 @@ typedef struct {
     uint32_t border_color;
     lv_coord_t pad;
     lv_coord_t gap;
-} ul_theme_header;
+} theme_header;
 
 /* Key theme for one specific key type and state */
 typedef struct {
     uint32_t fg_color;
     uint32_t bg_color;
     uint32_t border_color;
-} ul_theme_key_state;
+} theme_key_state;
 
 /* Key theme for one specific key type and all states */
 typedef struct {
-    ul_theme_key_state normal;
-    ul_theme_key_state pressed;
-} ul_theme_key;
+    theme_key_state normal;
+    theme_key_state pressed;
+} theme_key;
 
 /* Key theme */
 typedef struct {
     lv_coord_t border_width;
     lv_coord_t corner_radius;
-    ul_theme_key key_char;
-    ul_theme_key key_non_char;
-    ul_theme_key key_mod_act;
-    ul_theme_key key_mod_inact;
-} ul_theme_keys;
+    theme_key key_char;
+    theme_key key_non_char;
+    theme_key key_mod_act;
+    theme_key key_mod_inact;
+} theme_keys;
 
 /* Keyboard theme */
 typedef struct {
@@ -76,31 +76,31 @@ typedef struct {
     uint32_t border_color;
     lv_coord_t pad;
     lv_coord_t gap;
-    ul_theme_keys keys;
-} ul_theme_keyboard;
+    theme_keys keys;
+} theme_keyboard;
 
 /* Button theme for one specific button state */
 typedef struct {
     uint32_t fg_color;
     uint32_t bg_color;
     uint32_t border_color;
-} ul_theme_button_state;
+} theme_button_state;
 
 /* Button theme */
 typedef struct {
     lv_coord_t border_width;
     lv_coord_t corner_radius;
     lv_coord_t pad;
-    ul_theme_button_state normal;
-    ul_theme_button_state pressed;
-} ul_theme_button;
+    theme_button_state normal;
+    theme_button_state pressed;
+} theme_button;
 
 /* Text area cursor theme */
 typedef struct {
     lv_coord_t width;
     uint32_t color;
     int period;
-} ul_theme_textarea_cursor;
+} theme_textarea_cursor;
 
 /* Text area theme */
 typedef struct {
@@ -111,8 +111,8 @@ typedef struct {
     lv_coord_t corner_radius;
     lv_coord_t pad;
     uint32_t placeholder_color;
-    ul_theme_textarea_cursor cursor;
-} ul_theme_textarea;
+    theme_textarea_cursor cursor;
+} theme_textarea;
 
 /* Dropdown list theme */
 typedef struct {
@@ -124,29 +124,29 @@ typedef struct {
     uint32_t border_color;
     lv_coord_t corner_radius;
     lv_coord_t pad;
-} ul_theme_dropdown_list;
+} theme_dropdown_list;
 
 /* Dropdown theme */
 typedef struct {
-    ul_theme_button button;
-    ul_theme_dropdown_list list;
-} ul_theme_dropdown;
+    theme_button button;
+    theme_dropdown_list list;
+} theme_dropdown;
 
 /* Label */
 typedef struct {
     uint32_t fg_color;
-} ul_theme_label;
+} theme_label;
 
 /* Message box buttons theme */
 typedef struct {
     lv_coord_t gap;
-} ul_theme_msgbox_buttons;
+} theme_msgbox_buttons;
 
 /* Message box dimming theme */
 typedef struct {
     uint32_t color;
     short opacity;
-} ul_theme_msgbox_dimming;
+} theme_msgbox_dimming;
 
 /* Message box theme */
 typedef struct {
@@ -157,49 +157,49 @@ typedef struct {
     lv_coord_t corner_radius;
     lv_coord_t pad;
     lv_coord_t gap;
-    ul_theme_msgbox_buttons buttons;
-    ul_theme_msgbox_dimming dimming;
-} ul_theme_msgbox;
+    theme_msgbox_buttons buttons;
+    theme_msgbox_dimming dimming;
+} theme_msgbox;
 
 /* Progress bar indicator theme */
 typedef struct {
     uint32_t bg_color;
-} ul_theme_bar_indicator;
+} theme_bar_indicator;
 
 /* Progress bar theme */
 typedef struct {
     lv_coord_t border_width;
     uint32_t border_color;
     lv_coord_t corner_radius;
-    ul_theme_bar_indicator indicator;
-} ul_theme_bar;
+    theme_bar_indicator indicator;
+} theme_bar;
 
 /* Full theme */
 typedef struct {
     char *name;
-    ul_theme_window window;
-    ul_theme_header header;
-    ul_theme_keyboard keyboard;
-    ul_theme_button button;
-    ul_theme_textarea textarea;
-    ul_theme_dropdown dropdown;
-    ul_theme_label label;
-    ul_theme_msgbox msgbox;
-    ul_theme_bar bar;
-} ul_theme;
+    theme_window window;
+    theme_header header;
+    theme_keyboard keyboard;
+    theme_button button;
+    theme_textarea textarea;
+    theme_dropdown dropdown;
+    theme_label label;
+    theme_msgbox msgbox;
+    theme_bar bar;
+} theme;
 
 /**
  * Prepare a keyboard widget to be themed with a theme.
  *
  * @param keyboard keyboard widget
  */
-void ul_theme_prepare_keyboard(lv_obj_t *keyboard);
+void theme_prepare_keyboard(lv_obj_t *keyboard);
 
 /**
  * Apply a UI theme.
  *
  * @param theme the theme to apply
  */
-void ul_theme_apply(const ul_theme *theme);
+void theme_apply(const theme *theme);
 
-#endif /* UL_THEME_H */
+#endif /* THEME_H */

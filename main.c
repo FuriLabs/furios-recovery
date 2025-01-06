@@ -69,8 +69,8 @@
  * Static variables
  */
 
-ul_cli_opts cli_opts;
-ul_config_opts conf_opts;
+cli_opts cli_options;
+config_opts conf_opts;
 
 static lv_color_t *buf = NULL;
 static lv_disp_draw_buf_t disp_buf;
@@ -418,7 +418,7 @@ static void update_image_mode(bool is_alternate) {
 }
 
 static void set_theme(bool is_alternate) {
-    ul_theme_apply(&(ul_themes_themes[is_alternate ? conf_opts.theme.alternate_id : conf_opts.theme.default_id]));
+    theme_apply(&(themes_themes[is_alternate ? conf_opts.theme.alternate_id : conf_opts.theme.default_id]));
 }
 
 static void toggle_pw_btn_clicked_cb(lv_event_t *event) {
@@ -960,17 +960,17 @@ static void decrypt(void) {
 
     switch (conf_opts.general.backend) {
 #if USE_FBDEV
-    case UL_BACKENDS_BACKEND_FBDEV:
+    case BACKENDS_BACKEND_FBDEV:
         fbdev_get_sizes(&hor_res, &ver_res, &dpi);
         break;
 #endif /* USE_FBDEV */
 #if USE_DRM
-    case UL_BACKENDS_BACKEND_DRM:
+    case BACKENDS_BACKEND_DRM:
         drm_get_sizes((lv_coord_t *)&hor_res, (lv_coord_t *)&ver_res, &dpi);
         break;
 #endif /* USE_DRM */
 #if USE_MINUI
-    case UL_BACKENDS_BACKEND_MINUI:
+    case BACKENDS_BACKEND_MINUI:
         minui_get_sizes(&hor_res, &ver_res, &dpi);
         break;
 #endif /* USE_MINUI */
@@ -1051,7 +1051,7 @@ static void decrypt(void) {
     lv_obj_add_state(textarea, LV_STATE_FOCUSED);
 
     /* Route physical keyboard input into textarea */
-    ul_indev_set_up_textarea_for_keyboard_input(textarea);
+    indev_set_up_textarea_for_keyboard_input(textarea);
 
     /* Reveal / obscure password button */
     toggle_pw_btn = lv_btn_create(textarea_container);
@@ -1083,7 +1083,7 @@ static void decrypt(void) {
     lv_obj_add_event_cb(keyboard, keyboard_value_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_set_pos(keyboard, 0, is_keyboard_hidden ? keyboard_height : 0);
     lv_obj_set_size(keyboard, hor_res, keyboard_height);
-    ul_theme_prepare_keyboard(keyboard);
+    theme_prepare_keyboard(keyboard);
 
     /* Apply textarea options */
     set_password_obscured(conf_opts.textarea.obscured);
@@ -1116,23 +1116,23 @@ static void open_terminal(void) {
 
     switch (conf_opts.general.backend) {
 #if USE_FBDEV
-    case UL_BACKENDS_BACKEND_FBDEV:
+    case BACKENDS_BACKEND_FBDEV:
         fbdev_exit();
         break;
 #endif /* USE_FBDEV */
 #if USE_DRM
-    case UL_BACKENDS_BACKEND_DRM:
+    case BACKENDS_BACKEND_DRM:
         drm_exit();
         break;
 #endif /* USE_DRM */
 #if USE_MINUI
-    case UL_BACKENDS_BACKEND_MINUI:
+    case BACKENDS_BACKEND_MINUI:
         minui_exit();
         break;
 #endif /* USE_MINUI */
     }
 
-    ul_terminal_reset_current_terminal();
+    terminal_reset_current_terminal();
 
     pid_t pid = fork();
     if (pid == 0) {
@@ -1162,7 +1162,7 @@ static void open_terminal(void) {
 
 static void sigaction_handler(int signum) {
     LV_UNUSED(signum);
-    ul_terminal_reset_current_terminal();
+    terminal_reset_current_terminal();
     exit(0);
 }
 
@@ -1436,21 +1436,21 @@ static void initialize_recovery_ui(void) {
 
     switch (conf_opts.general.backend) {
 #if USE_FBDEV
-    case UL_BACKENDS_BACKEND_FBDEV:
+    case BACKENDS_BACKEND_FBDEV:
         fbdev_init();
         fbdev_get_sizes(&hor_res, &ver_res, &dpi);
         disp_drv.flush_cb = fbdev_flush;
         break;
 #endif /* USE_FBDEV */
 #if USE_DRM
-    case UL_BACKENDS_BACKEND_DRM:
+    case BACKENDS_BACKEND_DRM:
         drm_init();
         drm_get_sizes((lv_coord_t *)&hor_res, (lv_coord_t *)&ver_res, &dpi);
         disp_drv.flush_cb = drm_flush;
         break;
 #endif /* USE_DRM */
 #if USE_MINUI
-    case UL_BACKENDS_BACKEND_MINUI:
+    case BACKENDS_BACKEND_MINUI:
         minui_init();
         minui_get_sizes(&hor_res, &ver_res, &dpi);
         disp_drv.flush_cb = minui_flush;
@@ -1462,12 +1462,12 @@ static void initialize_recovery_ui(void) {
     }
 
     /* Override display parameters with command line options if necessary */
-    if (cli_opts.hor_res > 0)
-        hor_res = cli_opts.hor_res;
-    if (cli_opts.ver_res > 0)
-        ver_res = cli_opts.ver_res;
-    if (cli_opts.dpi > 0)
-        dpi = cli_opts.dpi;
+    if (cli_options.hor_res > 0)
+        hor_res = cli_options.hor_res;
+    if (cli_options.ver_res > 0)
+        ver_res = cli_options.ver_res;
+    if (cli_options.dpi > 0)
+        dpi = cli_options.dpi;
 
     /* Prepare display buffer */
     const size_t buf_size = hor_res * ver_res / 10; /* At least 1/10 of the display size is recommended */
@@ -1480,17 +1480,17 @@ static void initialize_recovery_ui(void) {
     disp_drv.draw_buf = &disp_buf;
     disp_drv.hor_res = hor_res;
     disp_drv.ver_res = ver_res;
-    disp_drv.offset_x = cli_opts.x_offset;
-    disp_drv.offset_y = cli_opts.y_offset;
+    disp_drv.offset_x = cli_options.x_offset;
+    disp_drv.offset_y = cli_options.y_offset;
     disp_drv.dpi = dpi;
     lv_disp_drv_register(&disp_drv);
 
     printf("Display resolution: %dx%d, DPI: %d, Offset: (%d, %d)\n",
-           hor_res, ver_res, dpi, cli_opts.x_offset, cli_opts.y_offset);
+           hor_res, ver_res, dpi, cli_options.x_offset, cli_options.y_offset);
 
     /* Connect input devices */
-    ul_indev_auto_connect(conf_opts.input.keyboard, conf_opts.input.pointer, conf_opts.input.touchscreen);
-    ul_indev_set_up_mouse_cursor();
+    indev_auto_connect(conf_opts.input.keyboard, conf_opts.input.pointer, conf_opts.input.touchscreen);
+    indev_set_up_mouse_cursor();
 
     /* Initialise theme */
     set_theme(is_alternate_theme);
@@ -1505,13 +1505,13 @@ static void initialize_recovery_ui(void) {
 
 int main(int argc, char *argv[]) {
     /* Parse command line options */
-    ul_cli_parse_opts(argc, argv, &cli_opts);
+    cli_parse_opts(argc, argv, &cli_options);
 
     /* Parse config files */
-    ul_config_parse(cli_opts.config_files, cli_opts.num_config_files, &conf_opts);
+    config_parse(cli_options.config_files, cli_options.num_config_files, &conf_opts);
 
     /* Prepare current TTY and clean up on termination */
-    ul_terminal_prepare_current_terminal();
+    terminal_prepare_current_terminal();
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     action.sa_handler = sigaction_handler;
@@ -1539,7 +1539,7 @@ int main(int argc, char *argv[]) {
  *
  * @return tick in ms
  */
-uint32_t ul_get_tick(void) {
+uint32_t get_tick(void) {
     static uint64_t start_ms = 0;
     if (start_ms == 0) {
         struct timeval tv_start;

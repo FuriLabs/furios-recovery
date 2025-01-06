@@ -87,7 +87,7 @@ static void close_current_terminal(void) {
  * Public functions
  */
 
-void ul_terminal_prepare_current_terminal(void) {
+void terminal_prepare_current_terminal(void) {
     reopen_current_terminal();
 
     if (current_fd < 0) {
@@ -115,7 +115,7 @@ void ul_terminal_prepare_current_terminal(void) {
     }
 }
 
-void ul_terminal_reset_current_terminal(void) {
+void terminal_reset_current_terminal(void) {
     if (current_fd < 0) {
         printf("Could not reset current terminal\n");
         return;

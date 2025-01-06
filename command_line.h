@@ -18,8 +18,8 @@
  */
 
 
-#ifndef UL_COMMAND_LINE_H
-#define UL_COMMAND_LINE_H
+#ifndef COMMAND_LINE_H
+#define COMMAND_LINE_H
 
 #include <stdbool.h>
 
@@ -43,7 +43,7 @@ typedef struct {
     int dpi;
     /* Verbose mode. If true, provide more detailed logging output on STDERR. */
     bool verbose;
-} ul_cli_opts;
+} cli_opts;
 
 /**
  * Parse command line arguments and exit on failure.
@@ -52,6 +52,6 @@ typedef struct {
  * @param argv arguments as an array of strings
  * @param opts pointer for writing the parsed options into
  */
-void ul_cli_parse_opts(int argc, char *argv[], ul_cli_opts *opts);
+void cli_parse_opts(int argc, char *argv[], cli_opts *opts);
 
-#endif /* UL_COMMAND_LINE_H */
+#endif /* COMMAND_LINE_H */

@@ -27,7 +27,7 @@
  * Public interface
  */
 
-const char *ul_backends_backends[] = {
+const char *backends_backends[] = {
 #if USE_MINUI
     "minui",
 #endif /* USE_MINUI */
@@ -40,13 +40,13 @@ const char *ul_backends_backends[] = {
     NULL
 };
 
-ul_backends_backend_id_t ul_backends_find_backend_with_name(const char *name) {
-    for (int i = 0; ul_backends_backends[i] != NULL; ++i) {
-        if (strcmp(ul_backends_backends[i], name) == 0) {
+backends_backend_id_t backends_find_backend_with_name(const char *name) {
+    for (int i = 0; backends_backends[i] != NULL; ++i) {
+        if (strcmp(backends_backends[i], name) == 0) {
             printf("Found backend: %s\n", name);
             return i;
         }
     }
     printf("Backend %s not found\n", name);
-    return UL_BACKENDS_BACKEND_NONE;
+    return BACKENDS_BACKEND_NONE;
 }

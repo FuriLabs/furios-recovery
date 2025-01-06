@@ -24,7 +24,7 @@ project(
   meson_version: '>=0.53.0'
 )
 
-add_project_arguments('-DUL_VERSION="@0@"'.format(meson.project_version()), language: ['c'])
+add_project_arguments('-DVERSION="@0@"'.format(meson.project_version()), language: ['c'])
 
 enable_static = (get_option('default_library') == 'static')
 
@@ -35,7 +35,6 @@ furios_recovery_sources = [
   'cursor.c',
   'font_32.c',
   'indev.c',
-  'log.c',
   'main.c',
   'sq2lv_layouts.c',
   'terminal.c',

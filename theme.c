@@ -31,7 +31,7 @@
  * Static variables
  */
 
-static ul_theme current_theme;
+static theme current_theme;
 static lv_theme_t lv_theme;
 
 static struct {
@@ -70,7 +70,7 @@ static bool are_styles_initialised = false;
  *
  * @param theme theme to derive the styles from
  */
-static void init_styles(const ul_theme *theme);
+static void init_styles(const theme *theme);
 
 /**
  * Initialise or reset a style.
@@ -99,7 +99,7 @@ static void keyboard_draw_part_begin_cb(lv_event_t *event);
  * Static functions
  */
 
-static void init_styles(const ul_theme *theme) {
+static void init_styles(const theme *theme) {
     reset_style(&(styles.widget));
     lv_style_set_text_font(&(styles.widget), &font_32);
 
@@ -251,7 +251,7 @@ static void apply_theme_cb(lv_theme_t *theme, lv_obj_t *obj) {
         return;
     }
 
-    if (lv_obj_has_flag(obj, UL_WIDGET_HEADER)) {
+    if (lv_obj_has_flag(obj, WIDGET_HEADER)) {
         lv_obj_add_style(obj, &(styles.header), 0);
         return;
     }
@@ -343,7 +343,7 @@ static void keyboard_draw_part_begin_cb(lv_event_t *event) {
         return;
     }
 
-    ul_theme_key *key = NULL;
+    theme_key *key = NULL;
 
     if ((btnm->ctrl_bits[dsc->id] & SQ2LV_CTRL_MOD_INACTIVE) == SQ2LV_CTRL_MOD_INACTIVE) {
         key = &(current_theme.keyboard.keys.key_mod_inact);
@@ -367,11 +367,11 @@ static void keyboard_draw_part_begin_cb(lv_event_t *event) {
  * Public functions
  */
 
-void ul_theme_prepare_keyboard(lv_obj_t *keyboard) {
+void theme_prepare_keyboard(lv_obj_t *keyboard) {
     lv_obj_add_event_cb(keyboard, keyboard_draw_part_begin_cb, LV_EVENT_DRAW_PART_BEGIN, NULL);
 }
 
-void ul_theme_apply(const ul_theme *theme) {
+void theme_apply(const theme *theme) {
     if (!theme) {
         printf("Could not apply theme from NULL pointer\n");
         return;

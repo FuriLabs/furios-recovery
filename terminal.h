@@ -18,17 +18,17 @@
  */
 
 
-#ifndef UL_TERMINAL_H
-#define UL_TERMINAL_H
+#ifndef TERMINAL_H
+#define TERMINAL_H
 
 /**
  * Prepare the current TTY for graphics output.
  */
-void ul_terminal_prepare_current_terminal(void);
+void terminal_prepare_current_terminal(void);
 
 /**
  * Reset the current TTY to text output.
  */
-void ul_terminal_reset_current_terminal(void);
+void terminal_reset_current_terminal(void);
 
-#endif /* UL_TERMINAL_H */
+#endif /* TERMINAL_H */

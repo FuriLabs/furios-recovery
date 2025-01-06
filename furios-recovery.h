@@ -18,22 +18,22 @@
  */
 
 
-#ifndef UL_FURIOS_RECOVERY_H
-#define UL_FURIOS_RECOVERY_H
+#ifndef FURIOS_RECOVERY_H
+#define FURIOS_RECOVERY_H
 
 #include "lvgl/lvgl.h"
 #include <sys/stat.h>
 #include <sys/mount.h>
 
-#ifndef UL_VERSION
-#define UL_VERSION "?" /* Just to silence IDE warning. Real version injected by meson during build. */
+#ifndef VERSION
+#define VERSION "?" /* Just to silence IDE warning. Real version injected by meson during build. */
 #endif
 
 /**
  * Fonts
  */
 
-#define UL_SYMBOL_ADJUST "\xef\x81\x82" // 0xF042 (https://fontawesome.com/v5.15/icons/adjust?style=solid)
-#define UL_SYMBOL_CHEVRON_LEFT "\xef\x81\x93" // 0xF053 (https://fontawesome.com/v5/icons/chevron-left?style=solid&s=solid)
+#define SYMBOL_ADJUST "\xef\x81\x82" // 0xF042 (https://fontawesome.com/v5.15/icons/adjust?style=solid)
+#define SYMBOL_CHEVRON_LEFT "\xef\x81\x93" // 0xF053 (https://fontawesome.com/v5/icons/chevron-left?style=solid&s=solid)
 
-#endif /* UL_FURIOS_RECOVERY_H */
+#endif /* FURIOS_RECOVERY_H */

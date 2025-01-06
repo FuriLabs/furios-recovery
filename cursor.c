@@ -125,7 +125,7 @@ static const uint8_t data[] = {
  * Public interface
  */
 
-const lv_img_dsc_t ul_cursor_img_dsc = {
+const lv_img_dsc_t cursor_img_dsc = {
     .header.always_zero = 0,
     .header.w = 14,
     .header.h = 20,

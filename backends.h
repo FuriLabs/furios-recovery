@@ -18,34 +18,34 @@
  */
 
 
-#ifndef UL_BACKENDS_H
-#define UL_BACKENDS_H
+#ifndef BACKENDS_H
+#define BACKENDS_H
 
 #include "lv_drv_conf.h"
 
-/* NOTE: Only UL_BACKENDS_BACKEND_NONE is ought to have an explicit value assigned */
+/* NOTE: Only BACKENDS_BACKEND_NONE is ought to have an explicit value assigned */
 typedef enum {
-    UL_BACKENDS_BACKEND_NONE = -1,
+    BACKENDS_BACKEND_NONE = -1,
 #if USE_MINUI
-    UL_BACKENDS_BACKEND_MINUI,
+    BACKENDS_BACKEND_MINUI,
 #endif /* USE_MINUI */
 #if USE_FBDEV
-    UL_BACKENDS_BACKEND_FBDEV,
+    BACKENDS_BACKEND_FBDEV,
 #endif /* USE_FBDEV */
 #if USE_DRM
-    UL_BACKENDS_BACKEND_DRM,
+    BACKENDS_BACKEND_DRM,
 #endif /* USE_DRM */
-} ul_backends_backend_id_t;
+} backends_backend_id_t;
 
 /* Backends */
-extern const char *ul_backends_backends[];
+extern const char *backends_backends[];
 
 /**
  * Find the first backend with a given name.
  *
  * @param name backend name
- * @return ID of the first matching backend or UL_BACKENDS_BACKEND_NONE if no backend matched
+ * @return ID of the first matching backend or BACKENDS_BACKEND_NONE if no backend matched
  */
-ul_backends_backend_id_t ul_backends_find_backend_with_name(const char *name);
+backends_backend_id_t backends_find_backend_with_name(const char *name);
 
-#endif /* UL_BACKENDS_H */
+#endif /* BACKENDS_H */
