@@ -52,6 +52,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <mntent.h>
 #include <errno.h>
 
 #include <sys/reboot.h>
@@ -80,6 +81,7 @@ bool is_password_obscured = true;
 bool is_keyboard_hidden = true;
 
 bool enabling_ssh = false;
+bool mounting_rootfs = false;
 
 /* Main page */
 lv_obj_t *keyboard = NULL;
@@ -91,6 +93,8 @@ lv_obj_t *factory_reset_btn;
 lv_obj_t *theme_btn;
 lv_obj_t *ssh_btn;
 lv_obj_t *ssh_btn_label;
+lv_obj_t *mount_rootfs_btn;
+lv_obj_t *mount_rootfs_btn_label;
 lv_obj_t *terminal_btn;
 lv_obj_t *brightness_slider;
 
@@ -133,9 +137,26 @@ static void toggle_theme_btn_clicked_cb(lv_event_t *event);
 static void toggle_ssh_btn_clicked_cb(lv_event_t *event);
 
 /**
+ * Handle LV_EVENT_CLICKED events from the mount rootfs toggle button.
+ *
+ * @param event the event object
+ */
+static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event);
+
+/**
  * Enable or disable SSH access
  */
 static void enable_ssh(void);
+
+/**
+ * Mount or unmount the rootfs
+ */
+static void toggle_mount_rootfs(void);
+
+/**
+ * Checks if something is mounted on /rootfs
+ */
+static int check_root_mount(void);
 
 /**
  * Toggle between the light and dark theme.
@@ -293,6 +314,13 @@ static void textarea_ready_cb(lv_event_t *event);
  * @param textarea the textarea widget
  */
 static void check_password_enable_ssh(lv_obj_t *textarea);
+
+/**
+ * Check password against LVM for mounting the rootfs
+ *
+ * @param textarea the textarea widget
+ */
+static void check_password_mount_rootfs(lv_obj_t *textarea);
 
 /**
  * Check password against LVM for factory reset
@@ -571,6 +599,7 @@ static void perform_factory_reset(lv_timer_t *timer) {
     } else {
         if (result == 1) {
             enabling_ssh = false;
+            mounting_rootfs = false;
             decrypt(); // Decrypt LVM if necessary
             lv_msgbox_close(resetting_mbox);
             return;
@@ -623,11 +652,12 @@ static void keyboard_value_changed_cb(lv_event_t *event) {
 }
 
 static void textarea_ready_cb(lv_event_t *event) {
-    if (enabling_ssh) {
+    if (enabling_ssh)
         check_password_enable_ssh(lv_event_get_target(event));
-    } else {
+    else if (mounting_rootfs)
+        check_password_mount_rootfs(lv_event_get_target(event));
+    else
         check_password_factory_reset(lv_event_get_target(event));
-    }
 }
 
 static void check_password_enable_ssh(lv_obj_t *textarea) {
@@ -637,6 +667,24 @@ static void check_password_enable_ssh(lv_obj_t *textarea) {
 
     if (result == EXIT_SUCCESS) {
         enable_ssh();
+        restore_main_screen();
+    } else if (result == 2) {
+        attempt_count++;
+        if (attempt_count >= 3) {
+            lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempt reached.", NULL, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_center(error_mbox);
+        }
+    }
+}
+
+static void check_password_mount_rootfs(lv_obj_t *textarea) {
+    const char *password = lv_textarea_get_text(textarea);
+    static int attempt_count = 0;
+    int result = mount_luks_lvm_droidian_helper(password);
+
+    if (result == EXIT_SUCCESS) {
+        toggle_mount_rootfs();
         restore_main_screen();
     } else if (result == 2) {
         attempt_count++;
@@ -931,6 +979,7 @@ static void restore_main_screen(void) {
     lv_obj_clear_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(mount_rootfs_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* Delete all decrypt screen elements */
     if (decrypt_container != NULL) {
@@ -997,6 +1046,7 @@ static void decrypt(void) {
     lv_obj_add_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(mount_rootfs_btn, LV_OBJ_FLAG_HIDDEN);
 
     /* Main flexbox */
     decrypt_container = lv_obj_create(lv_scr_act());
@@ -1019,10 +1069,16 @@ static void decrypt(void) {
     lv_spangroup_set_overflow(spangroup, LV_SPAN_OVERFLOW_ELLIPSIS);
     lv_span_t *span1 = lv_spangroup_new_span(spangroup);
 
+    const char *label_text = "";
+
     /* Label text */
-    const char *label_text = enabling_ssh ?
-        "Password required for SSH access" :
-        "Password required for factory reset";
+    if (enabling_ssh)
+        label_text = "Password required for SSH access";
+    else if (mounting_rootfs)
+        label_text = "Password required for mounting the rootfs";
+    else
+        label_text = "Password required for factory reset";
+
     lv_span_set_text(span1, label_text);
 
     /* Size label to content */
@@ -1172,9 +1228,8 @@ static void enable_ssh() {
     if (stat("/tmp/dropbear-enabled", &buffer) == 0) {
         if (stat("/scripts/enable-ssh.sh", &buffer) == 0) {
             system("/scripts/enable-ssh.sh 0");
-            if (ip_label_container != NULL) {
+            if (ip_label_container != NULL)
                 lv_obj_add_flag(ip_label_container, LV_OBJ_FLAG_HIDDEN);
-            }
             lv_label_set_text(ssh_btn_label, "Enable SSH");
         }
     } else {
@@ -1207,10 +1262,79 @@ static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
     size_t print_bytes = 64;
     int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
     if (result == 1) {
+        mounting_rootfs = false;
         enabling_ssh = true;
         decrypt();
     } else {
         enable_ssh();
+    }
+}
+
+static int check_root_mount(void) {
+    FILE *mtab = setmntent("/proc/mounts", "r");
+    struct mntent *mount;
+
+    if (!mtab)
+        return 0;
+
+    while ((mount = getmntent(mtab)) != NULL) {
+        if (strcmp(mount->mnt_dir, "/rootfs") == 0) {
+            endmntent(mtab);
+            return 1;
+        }
+    }
+
+    endmntent(mtab);
+    return 0;
+}
+
+static void toggle_mount_rootfs() {
+    struct stat buffer;
+    const char *mount_point = "/rootfs";
+    int mount_result;
+
+    if (check_root_mount()) {
+        if (umount(mount_point) == 0)
+            lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
+        return;
+    }
+
+    mkdir(mount_point, 0755);
+
+    // First try droidian-droidian--rootfs
+    if (stat("/dev/mapper/droidian-droidian--rootfs", &buffer) == 0) {
+        mount_result = mount("/dev/mapper/droidian-droidian--rootfs", mount_point, "ext4", 0, NULL);
+        if (mount_result == 0) {
+            lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+            return;
+        }
+    }
+
+    // If first mount failed, try droidian_encrypted
+    if (stat("/dev/mapper/droidian_encrypted", &buffer) == 0) {
+        mount_result = mount("/dev/mapper/droidian_encrypted", mount_point, "ext4", 0, NULL);
+        if (mount_result == 0) {
+            lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+            return;
+        }
+    }
+
+    // If we get here, both mounts failed
+    lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
+}
+
+static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event) {
+    LV_UNUSED(event);
+
+    const char *lvm_device_path = "/dev/droidian/droidian-reserved";
+    size_t print_bytes = 64;
+    int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
+    if (result == 1) {
+        enabling_ssh = false;
+        mounting_rootfs = true;
+        decrypt();
+    } else {
+        toggle_mount_rootfs();
     }
 }
 
@@ -1368,6 +1492,22 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1100);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    /* Mount button */
+    mount_rootfs_btn = lv_btn_create(label_container);
+    lv_obj_set_width(mount_rootfs_btn, LV_PCT(100));
+    lv_obj_set_height(mount_rootfs_btn, 100);
+    mount_rootfs_btn_label = lv_label_create(mount_rootfs_btn);
+
+    if (check_root_mount())
+        lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+    else
+        lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
+
+    lv_obj_add_event_cb(mount_rootfs_btn, toggle_mount_rootfs_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_align(mount_rootfs_btn, LV_ALIGN_TOP_MID, 0, 1200);
+    lv_obj_set_flex_flow(mount_rootfs_btn, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(mount_rootfs_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 }
 
 static void create_ui(uint32_t hor_res, uint32_t ver_res) {
