@@ -65,6 +65,7 @@
 #define MIN_BRIGHTNESS 5
 #define BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/brightness"
 #define MAX_BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/max_brightness"
+#define DT_COMPATIBLE_PATH "/sys/firmware/devicetree/base/compatible"
 
 /**
  * Static variables
@@ -403,6 +404,34 @@ static int read_int_from_file(const char *path, int default_value);
  * @param value is the value requeted for writing
  */
 static int write_int_to_file(const char *path, int value);
+
+/**
+ * Check if a path is a mount point
+ * @paran path to check against /proc/mounts
+ */
+static int is_mounted(const char* mount_point);
+
+/**
+ * Read the first DT compatible entry
+ */
+static char* read_dt_compatible(void);
+
+/**
+ * Execute a UBports action (such as an update or factory reset)
+ */
+
+static void execute_ubports_action(void);
+
+/**
+ * Check if a UBports action (such as an update or factory reset) should be performed
+ */
+static int is_ubports_action(void);
+
+/**
+ * Mount FuriOS persist partition
+ * @paran path is the partition
+ */
+static int mount_furios_persist(const char* partition);
 
 /**
  * Create all buttons in the label container
@@ -1379,6 +1408,178 @@ static int write_int_to_file(const char *path, int value) {
     return 0;
 }
 
+static int is_mounted(const char* mount_point) {
+    FILE* mtab = setmntent("/proc/mounts", "r");
+    struct mntent* entry;
+    int mounted = 0;
+
+    if (mtab == NULL) {
+        printf("Could not open /proc/mounts\n");
+        return 0;
+    }
+
+    while ((entry = getmntent(mtab)) != NULL) {
+        if (strcmp(entry->mnt_dir, mount_point) == 0) {
+            mounted = 1;
+            break;
+        }
+    }
+
+    endmntent(mtab);
+    return mounted;
+}
+
+static char* read_dt_compatible() {
+    FILE* file = fopen(DT_COMPATIBLE_PATH, "r");
+    if (file == NULL) {
+        printf("Error opening device tree file: %s\n", DT_COMPATIBLE_PATH);
+        return NULL;
+    }
+
+    char buffer[512] = {0};
+    size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, file);
+    fclose(file);
+
+    if (bytes_read == 0) {
+        printf("Error reading device tree file or file is empty\n");
+        return NULL;
+    }
+
+    // Device tree compatible strings are null-terminated
+    // We need to find the first entry which ends at the first null byte
+    char* first_entry = malloc(bytes_read + 1);
+    if (first_entry == NULL) {
+        printf("Memory allocation failed\n");
+        return NULL;
+    }
+
+    // Copy until first null byte
+    size_t i;
+    for (i = 0; i < bytes_read && buffer[i] != '\0'; i++) {
+        first_entry[i] = buffer[i];
+    }
+    first_entry[i] = '\0';
+
+    return first_entry;
+}
+
+static void execute_ubports_action(void) {
+    printf("Executing UBports action\n");
+
+    struct stat st;
+
+    if (stat("/etc/plymouth", &st) != 0) {
+        printf("Creating /etc/plymouth directory\n");
+        if (mkdir("/etc/plymouth", 0755) != 0) {
+            printf("Failed to create /etc/plymouth directory: %s\n", strerror(errno));
+        }
+    }
+
+    FILE* conf_file = fopen("/etc/plymouth/plymouthd.conf", "w");
+    if (conf_file != NULL) {
+        printf("Writing Plymouth configuration\n");
+        fprintf(conf_file, "[Daemon]\nTheme=ubports\n");
+        fclose(conf_file);
+    } else {
+        printf("Failed to write Plymouth configuration: %s\n", strerror(errno));
+    }
+
+    if (stat("/run/plymouth", &st) != 0) {
+        printf("Creating /run/plymouth directory\n");
+        if (mkdir("/run/plymouth", 0755) != 0)
+            printf("Failed to create /run/plymouth directory\n");
+    }
+
+    if (access("/usr/sbin/plymouthd", X_OK) == 0) {
+        printf("Starting plymouth daemon\n");
+        setenv("PLYMOUTH_FORCE_SCALE", "1", 1);
+        system("/usr/sbin/plymouthd --mode=boot --attach-to-session --pid-file=/run/plymouth/pid --ignore-serial-consoles --kernel-command-line \"splash plymouth.ignore-udev\"");
+    } else {
+        printf("/usr/sbin/plymouthd not found\n");
+    }
+
+    if (access("/usr/bin/plymouth", X_OK) == 0) {
+        printf("Showing plymouth splash\n");
+        setenv("PLYMOUTH_FORCE_SCALE", "1", 1);
+        system("/usr/bin/plymouth --show-splash");
+    } else {
+        printf("/usr/bin/plymouth not found\n");
+    }
+
+    printf("Creating symbolic link for cache\n");
+    unlink("/cache");
+    if (symlink("/ubuntu-userdata/cache", "/cache") != 0)
+        printf("Failed to create symbolic link to /cache: %s\n", strerror(errno));
+
+    if (access("/scripts/system-image-upgrader", X_OK) == 0) {
+        printf("Running system-image-upgrader\n");
+        system("/scripts/system-image-upgrader /cache/recovery/ubuntu_command");
+    } else {
+        printf("/scripts/system-image-upgrader not found\n");
+    }
+
+    reboot_device();
+}
+
+static int is_ubports_action(void) {
+    if (access("/furios-persist/bootman/ubuntu-userdata", F_OK) != 0) {
+        printf("UBports user data config does not exist\n");
+        return 0;
+    }
+
+
+    printf("Found UBports user data config file\n");
+
+    struct stat st;
+    if (stat("/dev/droidian/ubuntu-userdata", &st) != 0) {
+        printf("Partition path /dev/droidian/ubuntu-userdata does not exist\n");
+        return 0;
+    }
+
+    if (mkdir("/ubuntu-userdata", 0755) != 0 && errno != EEXIST) {
+        printf("Failed to create /ubuntu-userdata directory\n");
+        return 0;
+    }
+
+    if (is_mounted("/ubuntu-userdata")) {
+        printf("/ubuntu-userdata is already mounted\n");
+    } else {
+        if (mount("/dev/droidian/ubuntu-userdata", "/ubuntu-userdata", "ext4", 0, NULL) != 0) {
+            printf("Failed to mount /dev/droidian/ubuntu-userdata to /ubuntu-userdata\n");
+            return 0;
+        }
+        printf("Successfully mounted /dev/droidian/ubuntu-userdata to /ubuntu-userdata\n");
+    }
+
+    if (access("/ubuntu-userdata/cache/recovery/ubuntu_command", F_OK) != 0) {
+        printf("Ubuntu command file does not exist\n");
+        return 0;
+    }
+
+    printf("UBports action detected\n");
+    return 1;
+}
+
+static int mount_furios_persist(const char* partition) {
+    if (mkdir("/furios-persist", 0755) != 0 && errno != EEXIST) {
+        printf("Failed to create /furios-persist directory\n");
+        return 0;
+    }
+
+    if (is_mounted("/furios-persist")) {
+        printf("/furios-persist is already mounted\n");
+        return 1;
+    }
+
+    if (mount(partition, "/furios-persist", "ext4", 0, NULL) != 0) {
+        printf("Failed to mount %s to /furios-persist\n", partition);
+        return 0;
+    }
+
+    printf("Successfully mounted %s to /furios-persist\n", partition);
+    return 1;
+}
+
 static void create_buttons(lv_obj_t *label_container) {
     /* Brightness slider */
     brightness_slider = lv_slider_create(label_container);
@@ -1644,6 +1845,30 @@ static void initialize_recovery_ui(void) {
  */
 
 int main(int argc, char *argv[]) {
+    int furios_mounted = 0;
+    int ubuntu_mounted = 0;
+
+    char* dt_compatible = read_dt_compatible();
+    if (dt_compatible != NULL) {
+        printf("DT compatible %s\n", dt_compatible);
+
+        if (strcmp(dt_compatible, "furilabs,flx1") == 0) {
+            furios_mounted = mount_furios_persist("/dev/disk/by-partlabel/vendor_boot_a");
+            if (furios_mounted) {
+                ubuntu_mounted = is_ubports_action();
+                if (ubuntu_mounted)
+                    execute_ubports_action();
+            }
+        }
+
+        free(dt_compatible);
+    }
+
+    if (ubuntu_mounted)
+        umount("/ubuntu-userdata");
+    if (furios_mounted)
+        umount("/furios-persist");
+
     /* Parse command line options */
     cli_parse_opts(argc, argv, &cli_options);
 
@@ -1661,7 +1886,7 @@ int main(int argc, char *argv[]) {
     initialize_recovery_ui();
 
     /* Run lvgl in "tickless" mode */
-    while(1) {
+    while (1) {
         lv_task_handler();
         usleep(5000);
     }
