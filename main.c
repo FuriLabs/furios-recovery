@@ -1,7 +1,7 @@
 /**
  * Copyright 2021 Johannes Marbach
- * Copyright 2024 Bardia Moshiri
  * Copyright 2024 David Badiei
+ * Copyright 2025 Bardia Moshiri
  *
  * This file is part of furios-recovery, hereafter referred to as the program.
  *
@@ -49,17 +49,16 @@
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <unistd.h>
 #include <dirent.h>
 #include <mntent.h>
 #include <errno.h>
 
 #include <sys/reboot.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <sys/wait.h>
+
+#include <libinput.h>
+#include <linux/input.h>
 
 #define NUM_IMAGES 1
 #define MIN_BRIGHTNESS 5
@@ -108,15 +107,19 @@ lv_obj_t *textarea = NULL;
 lv_obj_t *toggle_pw_btn = NULL;
 lv_obj_t *toggle_kb_btn = NULL;
 
+/* Navigation variables */
+static lv_obj_t **nav_buttons          = NULL;
+static int        nav_button_count     = 0;
+static int        current_button_index = 0;
+static pthread_t  key_thread;
+static volatile bool key_thread_running = true;
+
+/* Images */
 LV_IMG_DECLARE(furilabs_white)
 LV_IMG_DECLARE(furilabs_black)
 
 const void *darkmode_imgs[] = {&furilabs_white};
 const void *lightmode_imgs[] = {&furilabs_black};
-
-/*
-   0: FuriLabs logo
-*/
 lv_obj_t* images[1];
 
 /**
@@ -434,6 +437,56 @@ static int is_ubports_action(void);
 static int mount_furios_persist(const char* partition);
 
 /**
+ * Initialize button navigation
+ *
+ * @param total_buttons Total number of buttons for navigation
+ */
+static void init_button_navigation(int total_buttons);
+
+/**
+ * Update button highlighting
+ */
+static void update_button_highlight(void);
+
+/**
+ * Check if a file is an input device
+ *
+ * @param path Path to the input device
+ * @return 1 if it's an input device, 0 otherwise
+ */
+static int is_input_device(const char *path);
+
+/**
+ * Initialize libinput and monitor for key events
+ *
+ * @param arg *arg is unused
+ */
+static void* key_input_thread(void *arg);
+
+/**
+ * Open callback for libinput
+ *
+ * @param path Device path to open
+ * @param flags Open flags
+ * @param user_data User data pointer (user_data is unused)
+ * @return File descriptor or negative error code
+ */
+static int open_restricted(const char *path, int flags, void *user_data);
+
+/**
+ * Close callback for libinput
+ *
+ * @param fd File descriptor to close
+ * @param user_data User data pointer (user_data is unused)
+ */
+static void close_restricted(int fd, void *user_data);
+
+/**
+ * Close callback for libinput
+ */
+static void close_restricted(int fd, void *user_data);
+
+/**
  * Create all buttons in the label container
  *
  * @param label container to create buttons in
@@ -546,9 +599,8 @@ static void shutdown_btn_clicked_cb(lv_event_t *event) {
 
 static void shutdown_mbox_value_changed_cb(lv_event_t *event) {
     lv_obj_t *mbox = lv_event_get_current_target(event);
-    if (lv_msgbox_get_active_btn(mbox) == 0) {
+    if (lv_msgbox_get_active_btn(mbox) == 0)
         shutdown();
-    }
     lv_msgbox_close(mbox);
 }
 
@@ -563,9 +615,8 @@ static void terminal_btn_clicked_cb(lv_event_t *event) {
 
 static void terminal_mbox_value_changed_cb(lv_event_t *event) {
     lv_obj_t *mbox = lv_event_get_current_target(event);
-    if (lv_msgbox_get_active_btn(mbox) == 0) {
+    if (lv_msgbox_get_active_btn(mbox) == 0)
         open_terminal();
-    }
     lv_msgbox_close(mbox);
 }
 
@@ -580,9 +631,8 @@ static void reboot_btn_clicked_cb(lv_event_t *event) {
 
 static void reboot_mbox_value_changed_cb(lv_event_t *event) {
     lv_obj_t *mbox = lv_event_get_current_target(event);
-    if (lv_msgbox_get_active_btn(mbox) == 0) {
+    if (lv_msgbox_get_active_btn(mbox) == 0)
         reboot_device();
-    }
     lv_msgbox_close(mbox);
 }
 
@@ -618,7 +668,7 @@ static void perform_factory_reset(lv_timer_t *timer) {
     int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
 
     if (result == -1) {
-        // rootfs.img in data? well we can't reset that for now
+        /* rootfs.img in data? well we can't reset that for now */
         lv_msgbox_close(resetting_mbox);
         static const char *btns[] = {"OK", ""};
         lv_obj_t *fail_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset", btns, false);
@@ -629,12 +679,12 @@ static void perform_factory_reset(lv_timer_t *timer) {
         if (result == 1) {
             enabling_ssh = false;
             mounting_rootfs = false;
-            decrypt(); // Decrypt LVM if necessary
+            decrypt(); /* Decrypt LVM if necessary */
             lv_msgbox_close(resetting_mbox);
             return;
         }
 
-        // LVM is not encrypted or unlocked, we can continue
+        /* LVM is not encrypted or unlocked, we can continue */
         int factory_reset_result = factory_reset();
 
         lv_msgbox_close(resetting_mbox);
@@ -658,7 +708,7 @@ static void perform_factory_reset(lv_timer_t *timer) {
 static void close_mbox_cb(lv_event_t *event) {
     lv_obj_t *mbox = lv_event_get_current_target(event);
 
-    // maybe do something instead of sleep?
+    /* maybe do something instead of sleep? */
     sleep(3);
     reboot_device();
     lv_msgbox_close(mbox);
@@ -811,8 +861,8 @@ static int drop_caches() {
 }
 
 static int factory_reset(void) {
-    // the reason most things here are system calls is because our ramdisk must be small and more libraries we link against the bigger the binary will get
-    // here, we're using pre existing binaries in the ramdisk to not take too much storage in the ramdisk
+    /* the reason most things here are system calls is because our ramdisk must be small and more libraries we link against the bigger the binary will get
+     * here, we're using pre existing binaries in the ramdisk to not take too much storage in the ramdisk */
     struct stat buffer;
     int result;
     char cmd[1024];
@@ -820,17 +870,16 @@ static int factory_reset(void) {
     char dtboimg_file[256] = "";
     char* slot_suffix = get_slot_suffix();
 
-    // If no slot suffix is found, default to an empty string so that single slot devices can work
-    if (slot_suffix == NULL) {
+    /* If no slot suffix is found, default to an empty string so that single slot devices can work */
+    if (slot_suffix == NULL)
         slot_suffix = strdup("");
-    }
 
-    drop_caches(); // tar will fill up cache, has to be cleared before writing
+    drop_caches(); /* tar will fill up cache, has to be cleared before writing */
 
     if (stat("/dev/disk/by-partlabel/super", &buffer) == 0) {
-        // if system_a doesn't exist
+        /* if system_a doesn't exist */
         if (stat("/dev/mapper/dynpart-system_a", &buffer) != 0) {
-            // if system_b doesn't exist
+            /* if system_b doesn't exist */
             if (stat("/dev/mapper/dynpart-system_b", &buffer) != 0) {
                 snprintf(cmd, sizeof(cmd), "dmsetup create --concise \"$(parse-android-dynparts /dev/disk/by-partlabel/super)\"");
                 system(cmd);
@@ -1240,7 +1289,7 @@ static void open_terminal(void) {
             exit(1);
         }
 
-        sleep(1); // wait for the other instance to start
+        sleep(1); /* wait for the other instance to start */
         exit(0);
     }
 }
@@ -1330,7 +1379,7 @@ static void toggle_mount_rootfs() {
 
     mkdir(mount_point, 0755);
 
-    // First try droidian-droidian--rootfs
+    /* First try droidian-droidian--rootfs */
     if (stat("/dev/mapper/droidian-droidian--rootfs", &buffer) == 0) {
         mount_result = mount("/dev/mapper/droidian-droidian--rootfs", mount_point, "ext4", 0, NULL);
         if (mount_result == 0) {
@@ -1339,7 +1388,7 @@ static void toggle_mount_rootfs() {
         }
     }
 
-    // If first mount failed, try droidian_encrypted
+    /* If first mount failed, try droidian_encrypted */
     if (stat("/dev/mapper/droidian_encrypted", &buffer) == 0) {
         mount_result = mount("/dev/mapper/droidian_encrypted", mount_point, "ext4", 0, NULL);
         if (mount_result == 0) {
@@ -1348,7 +1397,7 @@ static void toggle_mount_rootfs() {
         }
     }
 
-    // If we get here, both mounts failed
+    /* If we get here, both mounts failed */
     lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
 }
 
@@ -1381,9 +1430,8 @@ static int read_int_from_file(const char *path, int default_value) {
 
         char *endptr;
         long value = strtol(buffer, &endptr, 10);
-        if (*endptr == '\0' && value >= 0) {
+        if (*endptr == '\0' && value >= 0)
             return (int)value;
-        }
     }
 
     fclose(file);
@@ -1445,19 +1493,20 @@ static char* read_dt_compatible() {
         return NULL;
     }
 
-    // Device tree compatible strings are null-terminated
-    // We need to find the first entry which ends at the first null byte
+    /* Device tree compatible strings are null-terminated
+     * We need to find the first entry which ends at the first null byte */
     char* first_entry = malloc(bytes_read + 1);
     if (first_entry == NULL) {
         printf("Memory allocation failed\n");
         return NULL;
     }
 
-    // Copy until first null byte
+    /* Copy until first null byte */
     size_t i;
     for (i = 0; i < bytes_read && buffer[i] != '\0'; i++) {
         first_entry[i] = buffer[i];
     }
+
     first_entry[i] = '\0';
 
     return first_entry;
@@ -1470,9 +1519,8 @@ static void execute_ubports_action(void) {
 
     if (stat("/etc/plymouth", &st) != 0) {
         printf("Creating /etc/plymouth directory\n");
-        if (mkdir("/etc/plymouth", 0755) != 0) {
+        if (mkdir("/etc/plymouth", 0755) != 0)
             printf("Failed to create /etc/plymouth directory: %s\n", strerror(errno));
-        }
     }
 
     FILE* conf_file = fopen("/etc/plymouth/plymouthd.conf", "w");
@@ -1580,6 +1628,171 @@ static int mount_furios_persist(const char* partition) {
     return 1;
 }
 
+static void init_button_navigation(int total_buttons) {
+    if (nav_buttons)
+        free(nav_buttons);
+
+    nav_buttons = calloc(total_buttons, sizeof(lv_obj_t *));
+    nav_button_count = total_buttons;
+    current_button_index = 0;
+
+    printf("Initialized navigation for %d buttons\n", total_buttons);
+}
+
+static void update_button_highlight(void) {
+    /* Remove highlight from all buttons first */
+    for (int i = 0; i < nav_button_count; i++) {
+        lv_obj_clear_state(nav_buttons[i], LV_STATE_FOCUSED);
+    }
+
+    /* Add highlight to current button */
+    lv_obj_add_state(nav_buttons[current_button_index], LV_STATE_FOCUSED);
+    printf("Button %d highlighted\n", current_button_index);
+}
+
+static int is_input_device(const char *path) {
+    int fd;
+    char name[256];
+
+    fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 0;
+
+    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
+        close(fd);
+        return 0;
+    }
+
+    close(fd);
+    return 1;
+}
+
+static int open_restricted(const char *path, int flags, void *user_data) {
+    (void)user_data;
+    int fd = open(path, flags);
+    return fd < 0 ? -errno : fd;
+}
+
+static void close_restricted(int fd, void *user_data) {
+    (void)user_data;
+    close(fd);
+}
+
+static const struct libinput_interface interface = {
+    .open_restricted = open_restricted,
+    .close_restricted = close_restricted,
+};
+
+static void *key_input_thread(void *arg) {
+    (void)arg;
+    struct libinput *li;
+    struct libinput_event *event;
+    int rc;
+
+    li = libinput_path_create_context(&interface, NULL);
+    if (!li) {
+        fprintf(stderr, "Failed to initialize libinput context\n");
+        return NULL;
+    }
+
+    DIR *dir;
+    struct dirent *entry;
+    char path[PATH_MAX];
+
+    dir = opendir("/dev/input");
+    if (!dir) {
+        fprintf(stderr, "Failed to open /dev/input directory\n");
+        libinput_unref(li);
+        return NULL;
+    }
+
+    int device_count = 0;
+
+    while ((entry = readdir(dir)) != NULL) {
+        if (strncmp(entry->d_name, "event", 5) == 0) {
+            snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
+            if (is_input_device(path)) {
+                struct libinput_device *device;
+                device = libinput_path_add_device(li, path);
+                if (!device) {
+                    fprintf(stderr, "Failed to add device: %s\n", path);
+                } else {
+                    printf("Added input device: %s\n", path);
+                    device_count++;
+                }
+            }
+        }
+    }
+
+    closedir(dir);
+
+    if (device_count == 0) {
+        fprintf(stderr, "No input devices were added\n");
+        libinput_unref(li);
+        return NULL;
+    }
+
+    printf("Monitoring %d input devices for key events\n", device_count);
+
+    libinput_dispatch(li);
+
+    while (key_thread_running) {
+        int fd = libinput_get_fd(li);
+        fd_set fds;
+
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+
+        rc = select(fd + 1, &fds, NULL, NULL, NULL);
+        if (rc < 0 && errno != EINTR) {
+            fprintf(stderr, "select() failed: %s\n", strerror(errno));
+            break;
+        }
+
+        if (rc > 0 && FD_ISSET(fd, &fds)) {
+            libinput_dispatch(li);
+
+            while ((event = libinput_get_event(li))) {
+                if (libinput_event_get_type(event) == LIBINPUT_EVENT_KEYBOARD_KEY) {
+                    struct libinput_event_keyboard *key_event;
+                    enum libinput_key_state state;
+                    uint32_t key;
+
+                    key_event = libinput_event_get_keyboard_event(event);
+                    key = libinput_event_keyboard_get_key(key_event);
+                    state = libinput_event_keyboard_get_key_state(key_event);
+
+                    struct libinput_device *device = libinput_event_get_device(event);
+                    const char *device_name = libinput_device_get_name(device);
+
+                    printf("Key event from '%s': key=%d, state=%d\n",
+                           device_name, key, state);
+                    if (state == LIBINPUT_KEY_STATE_PRESSED) {
+                        switch (key) {
+                            case KEY_VOLUMEUP:
+                                current_button_index = (current_button_index + nav_button_count - 1) % nav_button_count;
+                                update_button_highlight();
+                                break;
+                            case KEY_VOLUMEDOWN:
+                                current_button_index = (current_button_index + 1) % nav_button_count;
+                                update_button_highlight();
+                                break;
+                            case KEY_POWER:
+                                if (nav_buttons[current_button_index])
+                                    lv_event_send(nav_buttons[current_button_index], LV_EVENT_CLICKED, NULL);
+                                break;
+                        }
+                    }
+                }
+                libinput_event_destroy(event);
+            }
+        }
+    }
+
+    libinput_unref(li);
+    return NULL;
+}
+
 static void create_buttons(lv_obj_t *label_container) {
     /* Brightness slider */
     brightness_slider = lv_slider_create(label_container);
@@ -1617,10 +1830,13 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_style_set_pad_all(&style_knob, 5);
     lv_obj_add_style(brightness_slider, &style_knob, LV_PART_KNOB);
 
-    /* Brightness label */
     lv_obj_t *brightness_label = lv_label_create(label_container);
     lv_label_set_text(brightness_label, "Brightness control");
     lv_obj_align_to(brightness_label, brightness_slider, LV_ALIGN_OUT_TOP_MID, 0, -10);
+
+    /* Initialize navigation array for 7 buttons */
+    init_button_navigation(7);
+    int btn_index = 0;
 
     /* Reboot button */
     reboot_btn = lv_btn_create(label_container);
@@ -1632,6 +1848,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, 600);
     lv_obj_set_flex_flow(reboot_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(reboot_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = reboot_btn;
 
     /* Shutdown button */
     shutdown_btn = lv_btn_create(label_container);
@@ -1643,6 +1860,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(shutdown_btn, LV_ALIGN_TOP_MID, 0, 700);
     lv_obj_set_flex_flow(shutdown_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(shutdown_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = shutdown_btn;
 
     /* Factory reset button */
     factory_reset_btn = lv_btn_create(label_container);
@@ -1654,8 +1872,9 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(factory_reset_btn, LV_ALIGN_TOP_MID, 0, 800);
     lv_obj_set_flex_flow(factory_reset_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(factory_reset_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = factory_reset_btn;
 
-    /* Theme button */
+    /* Theme toggle button */
     theme_btn = lv_btn_create(label_container);
     lv_obj_set_width(theme_btn, LV_PCT(100));
     lv_obj_set_height(theme_btn, 100);
@@ -1665,6 +1884,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(theme_btn, LV_ALIGN_TOP_MID, 0, 900);
     lv_obj_set_flex_flow(theme_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(theme_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = theme_btn;
 
     /* Terminal button */
     terminal_btn = lv_btn_create(label_container);
@@ -1676,8 +1896,9 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 1000);
     lv_obj_set_flex_flow(terminal_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(terminal_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = terminal_btn;
 
-    /* SSH button */
+    /* SSH toggle button */
     ssh_btn = lv_btn_create(label_container);
     lv_obj_set_width(ssh_btn, LV_PCT(100));
     lv_obj_set_height(ssh_btn, 100);
@@ -1693,8 +1914,9 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1100);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = ssh_btn;
 
-    /* Mount button */
+    /* Mount rootfs toggle button */
     mount_rootfs_btn = lv_btn_create(label_container);
     lv_obj_set_width(mount_rootfs_btn, LV_PCT(100));
     lv_obj_set_height(mount_rootfs_btn, 100);
@@ -1709,6 +1931,10 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(mount_rootfs_btn, LV_ALIGN_TOP_MID, 0, 1200);
     lv_obj_set_flex_flow(mount_rootfs_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(mount_rootfs_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    nav_buttons[btn_index++] = mount_rootfs_btn;
+
+    /* Highlight the first button by default */
+    update_button_highlight();
 }
 
 static void create_ui(uint32_t hor_res, uint32_t ver_res) {
@@ -1838,11 +2064,18 @@ static void initialize_recovery_ui(void) {
 
     /* Create UI elements */
     create_ui(hor_res, ver_res);
-}
 
-/**
- * Main
- */
+    /* Add a focus style for navigation highlighting */
+    static lv_style_t style_focus;
+    lv_style_init(&style_focus);
+    lv_style_set_border_width(&style_focus, 3);
+    lv_style_set_border_color(&style_focus, lv_palette_main(LV_PALETTE_YELLOW));
+    lv_style_set_border_opa(&style_focus, LV_OPA_COVER);
+    for (int i = 0; i < nav_button_count; i++) {
+        if (nav_buttons[i])
+            lv_obj_add_style(nav_buttons[i], &style_focus, LV_STATE_FOCUSED);
+    }
+}
 
 int main(int argc, char *argv[]) {
     int furios_mounted = 0;
@@ -1885,6 +2118,12 @@ int main(int argc, char *argv[]) {
 
     initialize_recovery_ui();
 
+    key_thread_running = true;
+    if (pthread_create(&key_thread, NULL, key_input_thread, NULL) != 0)
+        printf("Failed to start key input thread: %s\n", strerror(errno));
+    else
+        printf("Key input thread started successfully\n");
+
     /* Run lvgl in "tickless" mode */
     while (1) {
         lv_task_handler();
@@ -1893,11 +2132,6 @@ int main(int argc, char *argv[]) {
 
     return 0;
 }
-
-
-/**
- * Tick generation
- */
 
 /**
  * Generate tick for LVGL.
