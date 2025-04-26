@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Bardia Moshiri
+ * Copyright 2025 Bardia Moshiri
  *
  * This file is part of furios-recovery, hereafter referred to as the program.
  *
@@ -30,27 +30,68 @@
 
 #define LUKS_MAGIC "LUKS\xba\xbe"
 #define LUKS_MAGIC_LEN 6
-#define DEVICE "/dev/droidian/droidian-rootfs"
-#define HEADER "/dev/droidian/droidian-reserved"
-#define DECRYPTED "/dev/mapper/droidian_encrypted"
-#define NAME "droidian_encrypted"
+
+/* Droidian LVM paths */
+#define DROIDIAN_DEVICE "/dev/droidian/droidian-rootfs"
+#define DROIDIAN_HEADER "/dev/droidian/droidian-reserved"
+#define DROIDIAN_DECRYPTED "/dev/mapper/droidian_encrypted"
+#define DROIDIAN_NAME "droidian_encrypted"
+
+/* FuriOS LVM paths */
+#define FURIOS_DEVICE "/dev/furios/furios-rootfs"
+#define FURIOS_HEADER "/dev/furios/furios-reserved"
+#define FURIOS_DECRYPTED "/dev/mapper/furios_encrypted"
+#define FURIOS_NAME "furios_encrypted"
+
 #define PASSPHRASE_MAX 256
+
+int volume_group_exists(const char *vg_path) {
+    struct stat st;
+    return (stat(vg_path, &st) == 0);
+}
 
 int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes) {
     int fd, result;
     unsigned char *buffer;
     ssize_t read_bytes;
-
     struct stat st;
+    const char *actual_device = device_path;
+    char *temp_device = NULL;
+    int vg_type = 0; /* 0 = not determined, 1 = droidian, 2 = furios */
 
-    if (stat(DECRYPTED, &st) == 0) {
-        // DECRYPTED device exists, return as unencrypted
-        return 0;
+    /* If no device path specified, use header from available VG */
+    if (device_path == NULL) {
+        if (volume_group_exists("/dev/droidian")) {
+            temp_device = strdup(DROIDIAN_HEADER);
+            vg_type = 1;
+        } else if (volume_group_exists("/dev/furios")) {
+            temp_device = strdup(FURIOS_HEADER);
+            vg_type = 2;
+        } else {
+            fprintf(stderr, "No volume group found\n");
+            return -1;
+        }
+        actual_device = temp_device;
     }
 
-    fd = open(device_path, O_RDONLY);
+    /* Check if either decrypted device already exists */
+    if ((vg_type == 0 || vg_type == 1) && stat(DROIDIAN_DECRYPTED, &st) == 0) {
+        if (temp_device)
+            free(temp_device);
+        return 0; /* Already decrypted */
+    }
+
+    if ((vg_type == 0 || vg_type == 2) && stat(FURIOS_DECRYPTED, &st) == 0) {
+        if (temp_device)
+            free(temp_device);
+        return 0; /* Already decrypted */
+    }
+
+    fd = open(actual_device, O_RDONLY);
     if (fd == -1) {
         perror("Error opening device");
+        if (temp_device)
+            free(temp_device);
         return -1;
     }
 
@@ -58,6 +99,8 @@ int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes) {
     if (buffer == NULL) {
         fprintf(stderr, "Memory allocation failed\n");
         close(fd);
+        if (temp_device)
+            free(temp_device);
         return -1;
     }
 
@@ -66,58 +109,140 @@ int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes) {
         perror("Error reading device");
         close(fd);
         free(buffer);
+        if (temp_device)
+            free(temp_device);
         return -1;
     }
-
-/*    printf("Beginning of the LV (%zd bytes):\n", read_bytes);
-    for (size_t i = 0; i < read_bytes; ++i) {
-        printf("%02x ", buffer[i]);
-        if ((i + 1) % 16 == 0) printf("\n");
-    }
-    printf("\n");*/
 
     result = (memcmp(buffer, LUKS_MAGIC, LUKS_MAGIC_LEN - 1) == 0) ? 1 : 0;
 
     close(fd);
     free(buffer);
-//    printf("Encryption check result: %d\n", result);
+    if (temp_device) free(temp_device);
+
     return result;
 }
 
-int mount_luks_lvm(const char *passphrase) {
+int mount_luks_lvm(const char *passphrase, int vg_type) {
     struct crypt_device *cd = NULL;
     int result;
+    const char *device_path;
+    const char *name;
 
-    result = crypt_init(&cd, DEVICE);
+    /* Determine which VG to use */
+    if (vg_type == 0) {
+        /* Auto-detect which VG to use */
+        if (volume_group_exists("/dev/droidian")) {
+            device_path = DROIDIAN_DEVICE;
+            name = DROIDIAN_NAME;
+            vg_type = 1;
+        } else if (volume_group_exists("/dev/furios")) {
+            device_path = FURIOS_DEVICE;
+            name = FURIOS_NAME;
+            vg_type = 2;
+        } else {
+            fprintf(stderr, "No valid volume group found\n");
+            return EXIT_FAILURE;
+        }
+    } else if (vg_type == 1) {
+        device_path = DROIDIAN_DEVICE;
+        name = DROIDIAN_NAME;
+    } else if (vg_type == 2) {
+        device_path = FURIOS_DEVICE;
+        name = FURIOS_NAME;
+    } else {
+        fprintf(stderr, "Invalid volume group selection\n");
+        return EXIT_FAILURE;
+    }
+
+    result = crypt_init(&cd, device_path);
     if (result < 0) {
         fprintf(stderr, "crypt_init() failed: %s\n", strerror(-result));
         return EXIT_FAILURE;
     }
 
-    // Load the LUKS header from the given header device.
+    /* Load the LUKS header */
+    result = crypt_load(cd, CRYPT_LUKS1, NULL);
     if (result < 0) {
         fprintf(stderr, "crypt_load() failed: %s\n", strerror(-result));
         crypt_free(cd);
         return EXIT_FAILURE;
     }
 
-    result = crypt_activate_by_passphrase(cd, NAME, CRYPT_ANY_SLOT, passphrase, strlen(passphrase), 0);
+    result = crypt_activate_by_passphrase(cd, name, CRYPT_ANY_SLOT,
+                                          passphrase, strlen(passphrase), 0);
     if (result < 0) {
         fprintf(stderr, "Activation failed: Incorrect passphrase or other error.\n");
         crypt_free(cd);
         return 2;
     }
 
-    printf("LUKS device %s activated successfully.\n", NAME);
-
+    printf("LUKS device %s activated successfully.\n", name);
     crypt_free(cd);
-
     return EXIT_SUCCESS;
 }
 
-int mount_luks_lvm_droidian_helper(const char *passphrase) {
-    if (passphrase == NULL || strlen(passphrase) >= PASSPHRASE_MAX) {
+int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
+    if (passphrase == NULL || strlen(passphrase) >= PASSPHRASE_MAX)
         return EXIT_FAILURE;
+
+    const char *device_path;
+    const char *header_path;
+    const char *name;
+    const char *helper_name;
+
+    /* Determine which VG to use */
+    if (vg_type == 0) {
+        /* Auto-detect which VG to use */
+        if (volume_group_exists("/dev/droidian")) {
+            device_path = DROIDIAN_DEVICE;
+            header_path = DROIDIAN_HEADER;
+            name = DROIDIAN_NAME;
+            helper_name = "droidian-encryption-helper";
+            vg_type = 1;
+        } else if (volume_group_exists("/dev/furios")) {
+            device_path = FURIOS_DEVICE;
+            header_path = FURIOS_HEADER;
+            name = FURIOS_NAME;
+            helper_name = "furios-encryption-helper";
+            vg_type = 2;
+        } else {
+            fprintf(stderr, "No valid volume group found\n");
+            return EXIT_FAILURE;
+        }
+    } else if (vg_type == 1) {
+        device_path = DROIDIAN_DEVICE;
+        header_path = DROIDIAN_HEADER;
+        name = DROIDIAN_NAME;
+        helper_name = "droidian-encryption-helper";
+    } else if (vg_type == 2) {
+        device_path = FURIOS_DEVICE;
+        header_path = FURIOS_HEADER;
+        name = FURIOS_NAME;
+        helper_name = "furios-encryption-helper";
+    } else {
+        fprintf(stderr, "Invalid volume group selection\n");
+        return EXIT_FAILURE;
+    }
+
+    /* Check if helper exists */
+    char helper_path[256];
+    snprintf(helper_path, sizeof(helper_path), "/usr/bin/%s", helper_name);
+
+    struct stat st;
+    if (stat(helper_path, &st) != 0) {
+        /* If specific helper doesn't exist, fall back to droidian helper */
+        if (vg_type == 2) {
+            helper_name = "droidian-encryption-helper";
+            snprintf(helper_path, sizeof(helper_path), "/usr/bin/%s", helper_name);
+            if (stat(helper_path, &st) != 0) {
+                fprintf(stderr, "No encryption helper found\n");
+                return EXIT_FAILURE;
+            }
+        } else {
+            fprintf(stderr, "No encryption helper found\n");
+            return EXIT_FAILURE;
+        }
     }
 
     int pipefd[2];
@@ -141,10 +266,10 @@ int mount_luks_lvm_droidian_helper(const char *passphrase) {
         }
         close(pipefd[0]);
 
-        execlp("droidian-encryption-helper", "droidian-encryption-helper",
-               "--device", DEVICE,
-               "--header", HEADER,
-               "--name", NAME,
+        execlp(helper_name, helper_name,
+               "--device", device_path,
+               "--header", header_path,
+               "--name", name,
                "--strip-newlines",
                (char *)NULL);
 

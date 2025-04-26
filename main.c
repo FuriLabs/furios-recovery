@@ -29,6 +29,10 @@
 #include "theme.h"
 #include "themes.h"
 #include "lvm.h"
+#include "utils.h"
+#include "recovery_libinput.h"
+#include "reset.h"
+#include "persist.h"
 
 #include "lv_drv_conf.h"
 
@@ -56,15 +60,12 @@
 
 #include <sys/reboot.h>
 #include <sys/wait.h>
-
-#include <libinput.h>
-#include <linux/input.h>
+#include <sys/time.h>
 
 #define NUM_IMAGES 1
 #define MIN_BRIGHTNESS 5
 #define BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/brightness"
 #define MAX_BRIGHTNESS_PATH "/sys/class/leds/lcd-backlight/max_brightness"
-#define DT_COMPATIBLE_PATH "/sys/firmware/devicetree/base/compatible"
 
 /**
  * Static variables
@@ -106,13 +107,6 @@ lv_obj_t *textarea_container = NULL;
 lv_obj_t *textarea = NULL;
 lv_obj_t *toggle_pw_btn = NULL;
 lv_obj_t *toggle_kb_btn = NULL;
-
-/* Navigation variables */
-static lv_obj_t **nav_buttons          = NULL;
-static int        nav_button_count     = 0;
-static int        current_button_index = 0;
-static pthread_t  key_thread;
-static volatile bool key_thread_running = true;
 
 /* Images */
 LV_IMG_DECLARE(furilabs_white)
@@ -156,11 +150,6 @@ static void enable_ssh(void);
  * Mount or unmount the rootfs
  */
 static void toggle_mount_rootfs(void);
-
-/**
- * Checks if something is mounted on /rootfs
- */
-static int check_root_mount(void);
 
 /**
  * Toggle between the light and dark theme.
@@ -339,21 +328,6 @@ static void check_password_factory_reset(lv_obj_t *textarea);
 static void factory_reset_password(lv_timer_t *timer);
 
 /**
- * Returns current slot suffix from cmdline
- */
-static char* get_slot_suffix(void);
-
-/**
- * Drop all caches on device
- */
-static int drop_caches(void);
-
-/**
- * Factory resets the device
- */
-static int factory_reset(void);
-
-/**
  * Restores the screen from the decryption page
  */
 static void restore_main_screen(void);
@@ -393,100 +367,6 @@ static void open_terminal(void);
 static void sigaction_handler(int signum);
 
 /**
- * Read a value from given path and return the value
- *
- * @paran path is the path of the file
- * @param default_value is the default value if there was an error
- */
-static int read_int_from_file(const char *path, int default_value);
-
-/**
- * Write a value to a given path
- *
- * @paran path is the path of the file
- * @param value is the value requeted for writing
- */
-static int write_int_to_file(const char *path, int value);
-
-/**
- * Check if a path is a mount point
- * @paran path to check against /proc/mounts
- */
-static int is_mounted(const char* mount_point);
-
-/**
- * Read the first DT compatible entry
- */
-static char* read_dt_compatible(void);
-
-/**
- * Execute a UBports action (such as an update or factory reset)
- */
-
-static void execute_ubports_action(void);
-
-/**
- * Check if a UBports action (such as an update or factory reset) should be performed
- */
-static int is_ubports_action(void);
-
-/**
- * Mount FuriOS persist partition
- * @paran path is the partition
- */
-static int mount_furios_persist(const char* partition);
-
-/**
- * Initialize button navigation
- *
- * @param total_buttons Total number of buttons for navigation
- */
-static void init_button_navigation(int total_buttons);
-
-/**
- * Update button highlighting
- */
-static void update_button_highlight(void);
-
-/**
- * Check if a file is an input device
- *
- * @param path Path to the input device
- * @return 1 if it's an input device, 0 otherwise
- */
-static int is_input_device(const char *path);
-
-/**
- * Initialize libinput and monitor for key events
- *
- * @param arg *arg is unused
- */
-static void* key_input_thread(void *arg);
-
-/**
- * Open callback for libinput
- *
- * @param path Device path to open
- * @param flags Open flags
- * @param user_data User data pointer (user_data is unused)
- * @return File descriptor or negative error code
- */
-static int open_restricted(const char *path, int flags, void *user_data);
-
-/**
- * Close callback for libinput
- *
- * @param fd File descriptor to close
- * @param user_data User data pointer (user_data is unused)
- */
-static void close_restricted(int fd, void *user_data);
-
-/**
- * Close callback for libinput
- */
-static void close_restricted(int fd, void *user_data);
-
-/**
  * Create all buttons in the label container
  *
  * @param label container to create buttons in
@@ -496,7 +376,7 @@ static void create_buttons(lv_obj_t *label_container);
 /**
  * Create main UI
  *
- * @param horizantal resolution
+ * @param horizontal resolution
  * @param vertical resolution
  */
 static void create_ui(uint32_t hor_res, uint32_t ver_res);
@@ -663,15 +543,21 @@ static void factory_reset_mbox_value_changed_cb(lv_event_t *event) {
 
 static void perform_factory_reset(lv_timer_t *timer) {
     lv_obj_t *resetting_mbox = (lv_obj_t *)timer->user_data;
-    const char *lvm_device_path = "/dev/droidian/droidian-reserved";
-    size_t print_bytes = 64;
-    int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
+
+    /* Check both volume groups */
+    int result = -1;
+
+    if (volume_group_exists("/dev/droidian"))
+        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
+
+    if (result != 1 && volume_group_exists("/dev/furios"))
+        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
 
     if (result == -1) {
-        /* rootfs.img in data? well we can't reset that for now */
+        /* No LVM/rootfs found */
         lv_msgbox_close(resetting_mbox);
         static const char *btns[] = {"OK", ""};
-        lv_obj_t *fail_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset", btns, false);
+        lv_obj_t *fail_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset - no valid rootfs found", btns, false);
         lv_obj_set_size(fail_mbox, 400, LV_SIZE_CONTENT);
         lv_obj_add_event_cb(fail_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_center(fail_mbox);
@@ -742,7 +628,9 @@ static void textarea_ready_cb(lv_event_t *event) {
 static void check_password_enable_ssh(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
-    int result = mount_luks_lvm_droidian_helper(password);
+
+    /* Use auto-detection for volume group */
+    int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
         enable_ssh();
@@ -760,7 +648,9 @@ static void check_password_enable_ssh(lv_obj_t *textarea) {
 static void check_password_mount_rootfs(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
-    int result = mount_luks_lvm_droidian_helper(password);
+
+    /* Use auto-detection for volume group */
+    int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
         toggle_mount_rootfs();
@@ -778,7 +668,9 @@ static void check_password_mount_rootfs(lv_obj_t *textarea) {
 static void check_password_factory_reset(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
-    int result = mount_luks_lvm_droidian_helper(password);
+
+    /* Use auto-detection for volume group */
+    int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
         lv_obj_t *resetting_mbox = lv_msgbox_create(NULL, NULL, "Resetting device...", NULL, false);
@@ -818,235 +710,137 @@ static void factory_reset_password(lv_timer_t *timer) {
     }
 }
 
-static char* get_slot_suffix() {
-    FILE* cmdline = fopen("/proc/cmdline", "r");
-    if (cmdline == NULL) {
-        perror("Error opening /proc/cmdline");
-        return NULL;
-    }
-
-    char buffer[1024];
-    char* result = NULL;
-    if (fgets(buffer, sizeof(buffer), cmdline) != NULL) {
-        char* token = strstr(buffer, "androidboot.slot_suffix=");
-        if (token != NULL) {
-            token += strlen("androidboot.slot_suffix=");
-            result = malloc(3 * sizeof(char));
-            if (result != NULL) {
-                strncpy(result, token, 2);
-                result[2] = '\0';
-            }
-        }
-    }
-
-    fclose(cmdline);
-    return result;
-}
-
-static int drop_caches() {
-    int fd = open("/proc/sys/vm/drop_caches", O_WRONLY);
-    if (fd == -1) {
-        perror("Failed to open /proc/sys/vm/drop_caches");
-        return -1;
-    }
-
-    if (write(fd, "1", 1) != 1) {
-        perror("Failed to write to /proc/sys/vm/drop_caches");
-        close(fd);
-        return -1;
-    }
-
-    close(fd);
-    return 0;
-}
-
-static int factory_reset(void) {
-    /* the reason most things here are system calls is because our ramdisk must be small and more libraries we link against the bigger the binary will get
-     * here, we're using pre existing binaries in the ramdisk to not take too much storage in the ramdisk */
+static void toggle_mount_rootfs(void) {
     struct stat buffer;
-    int result;
-    char cmd[1024];
-    char bootimg_file[256] = "";
-    char dtboimg_file[256] = "";
-    char* slot_suffix = get_slot_suffix();
+    const char *mount_point = "/rootfs";
+    int mount_result;
+    int current_mount = is_mounted(mount_point);
 
-    /* If no slot suffix is found, default to an empty string so that single slot devices can work */
-    if (slot_suffix == NULL)
-        slot_suffix = strdup("");
-
-    drop_caches(); /* tar will fill up cache, has to be cleared before writing */
-
-    if (stat("/dev/disk/by-partlabel/super", &buffer) == 0) {
-        /* if system_a doesn't exist */
-        if (stat("/dev/mapper/dynpart-system_a", &buffer) != 0) {
-            /* if system_b doesn't exist */
-            if (stat("/dev/mapper/dynpart-system_b", &buffer) != 0) {
-                snprintf(cmd, sizeof(cmd), "dmsetup create --concise \"$(parse-android-dynparts /dev/disk/by-partlabel/super)\"");
-                system(cmd);
-            }
-        }
+    if (current_mount) {
+        if (umount(mount_point) == 0)
+            lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
+        return;
     }
 
-    mkdir("/system_mnt", 0755);
-    if (stat("/dev/mapper/dynpart-system_a", &buffer) == 0) {
-        result = mount("/dev/mapper/dynpart-system_a", "/system_mnt", "ext4", 0, NULL);
-        if (result != 0) {
-            printf("Failed to mount dynpart-system_a\n");
-            free(slot_suffix);
-            return -1;
-        }
-    } else if (stat("/dev/mapper/dynpart-system_b", &buffer) == 0) {
-        result = mount("/dev/mapper/dynpart-system_b", "/system_mnt", "ext4", 0, NULL);
-        if (result != 0) {
-            printf("Failed to mount dynpart-system_b\n");
-            free(slot_suffix);
-            return -1;
-        }
-    } else {
-        printf("Failed to mount dynpart-system, block device doesn't not exist\n");
-        free(slot_suffix);
-        return -1;
-    }
+    mkdir(mount_point, 0755);
 
-    if (stat("/system_mnt/userdata.img.tar.gz", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "tar -xzOf /system_mnt/userdata.img.tar.gz | dd of=/dev/disk/by-partlabel/userdata bs=4M");
-    } else if (stat("/system_mnt/userdata-raw.img.tar.gz", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd), "tar -xzOf /system_mnt/userdata-raw.img.tar.gz | dd of=/dev/disk/by-partlabel/userdata bs=4M");
-    } else {
-        printf("Failed to find userdata archive\n");
-        umount("/system_mnt");
-        free(slot_suffix);
-        return -1;
-    }
-
-    result = system(cmd);
-    if (result != 0) {
-        printf("Failed to extract and write userdata\n");
-        umount("/system_mnt");
-        free(slot_suffix);
-        return -1;
-    }
-
-    if (stat("/system_mnt/boot.img", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd),
-                 "dd if=/system_mnt/boot.img of=/dev/disk/by-partlabel/boot%s bs=4M",
-                 slot_suffix);
-        result = system(cmd);
-        if (result != 0) {
-            printf("Failed to flash boot image%s%s\n",
-                   *slot_suffix ? " to slot suffix " : "",
-                   *slot_suffix ? slot_suffix : "");
-        } else {
-            printf("Flashed boot.img from /system_mnt\n");
-        }
-    } else {
-        printf("No /system_mnt/boot.img found.\n");
-    }
-
-    if (stat("/system_mnt/dtbo.img", &buffer) == 0) {
-        snprintf(cmd, sizeof(cmd),
-                 "dd if=/system_mnt/dtbo.img of=/dev/disk/by-partlabel/dtbo%s bs=4M",
-                 slot_suffix);
-        result = system(cmd);
-        if (result != 0) {
-            printf("Failed to flash dtbo image%s%s\n",
-                   *slot_suffix ? " to slot suffix " : "",
-                   *slot_suffix ? slot_suffix : "");
-        } else {
-            printf("Flashed dtbo.img from /system_mnt\n");
-        }
-    } else {
-        printf("No /system_mnt/dtbo.img found.\n");
-    }
-
-    if (stat("/system_mnt/boot.img", &buffer) != 0 ||
-        stat("/system_mnt/dtbo.img", &buffer) != 0) {
+    /* First try droidian LVM devices */
+    if (volume_group_exists("/dev/droidian")) {
+        /* Try droidian-droidian--rootfs */
         if (stat("/dev/mapper/droidian-droidian--rootfs", &buffer) == 0) {
-            mkdir("/rootfs_mnt", 0755);
-
-            result = mount("/dev/mapper/droidian-droidian--rootfs", "/rootfs_mnt", "ext4",0, NULL);
-            if (result != 0) {
-                printf("Failed to mount droidian-droidian--rootfs\n");
-                return -1;
+            mount_result = mount("/dev/mapper/droidian-droidian--rootfs", mount_point, "ext4", 0, NULL);
+            if (mount_result == 0) {
+                lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+                return;
             }
+        }
 
-            DIR *dir = opendir("/rootfs_mnt/boot");
-            if (dir == NULL) {
-                printf("Failed to opendir /rootfs_mnt/boot\n");
-                umount("/rootfs_mnt");
-                return -1;
+        /* Try droidian_encrypted */
+        if (stat("/dev/mapper/droidian_encrypted", &buffer) == 0) {
+            mount_result = mount("/dev/mapper/droidian_encrypted", mount_point, "ext4", 0, NULL);
+            if (mount_result == 0) {
+                lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+                return;
             }
-
-            struct dirent *entry;
-            while ((entry = readdir(dir)) != NULL) {
-                if (strncmp(entry->d_name, "boot.img", strlen("boot.img")) == 0) {
-                    strncpy(bootimg_file, entry->d_name, sizeof(bootimg_file) - 1);
-                    bootimg_file[sizeof(bootimg_file) - 1] = '\0';
-                    break;
-                }
-            }
-
-            rewinddir(dir);
-            while ((entry = readdir(dir)) != NULL) {
-                if (strncmp(entry->d_name, "dtbo.img", strlen("dtbo.img")) == 0) {
-                    strncpy(dtboimg_file, entry->d_name, sizeof(dtboimg_file) - 1);
-                    dtboimg_file[sizeof(dtboimg_file) - 1] = '\0';
-                    break;
-                }
-            }
-
-            closedir(dir);
-
-            if (bootimg_file[0] != '\0') {
-                char boot_path[512];
-                snprintf(boot_path, sizeof(boot_path), "/rootfs_mnt/boot/%s", bootimg_file);
-
-                snprintf(cmd, sizeof(cmd),
-                         "dd if=\"%s\" of=\"/dev/disk/by-partlabel/boot%s\" bs=4M",
-                         boot_path, slot_suffix);
-
-                result = system(cmd);
-                if (result != 0) {
-                    printf("Failed to flash boot image%s%s\n",
-                           *slot_suffix ? " to slot suffix " : "",
-                           *slot_suffix ? slot_suffix : "");
-                } else {
-                    printf("Flashed boot.img from /rootfs_mnt\n");
-                }
-            } else {
-                printf("Failed to find boot image in the rootfs\n");
-            }
-
-            if (dtboimg_file[0] != '\0') {
-                char dtbo_path[512];
-                snprintf(dtbo_path, sizeof(dtbo_path), "/rootfs_mnt/boot/%s", dtboimg_file);
-
-                snprintf(cmd, sizeof(cmd),
-                         "dd if=\"%s\" of=\"/dev/disk/by-partlabel/dtbo%s\" bs=4M",
-                         dtbo_path, slot_suffix);
-
-                result = system(cmd);
-                if (result != 0) {
-                    printf("Failed to flash dtbo image%s%s\n",
-                           *slot_suffix ? " to slot suffix " : "",
-                           *slot_suffix ? slot_suffix : "");
-                } else {
-                    printf("Flashed dtbo.img from /rootfs_mnt\n");
-                }
-            } else {
-                printf("Failed to find dtbo image in the rootfs\n");
-            }
-
-            umount("/rootfs_mnt");
-        } else {
-            printf("No /system_mnt images found and /dev/mapper/droidian-droidian--rootfs not available.\n");
         }
     }
 
-    umount("/system_mnt");
-    drop_caches();
-    free(slot_suffix);
-    return 0;
+    /* Then try furios LVM devices */
+    if (volume_group_exists("/dev/furios")) {
+        /* Try furios-furios--rootfs */
+        if (stat("/dev/mapper/furios-furios--rootfs", &buffer) == 0) {
+            mount_result = mount("/dev/mapper/furios-furios--rootfs", mount_point, "ext4", 0, NULL);
+            if (mount_result == 0) {
+                lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+                return;
+            }
+        }
+
+        /* Try furios_encrypted */
+        if (stat("/dev/mapper/furios_encrypted", &buffer) == 0) {
+            mount_result = mount("/dev/mapper/furios_encrypted", mount_point, "ext4", 0, NULL);
+            if (mount_result == 0) {
+                lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
+                return;
+            }
+        }
+    }
+
+    /* If we get here, all mounts failed */
+    lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
+}
+
+static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
+    LV_UNUSED(event);
+
+    /* Check both possible volume groups */
+    int result = -1;
+
+    if (volume_group_exists("/dev/droidian"))
+        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
+    if (result != 1 && volume_group_exists("/dev/furios"))
+        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
+
+    if (result == 1) {
+        mounting_rootfs = false;
+        enabling_ssh = true;
+        decrypt();
+    } else {
+        enable_ssh();
+    }
+}
+
+static void enable_ssh() {
+    struct stat buffer;
+
+    if (stat("/tmp/dropbear-enabled", &buffer) == 0) {
+        if (stat("/scripts/enable-ssh.sh", &buffer) == 0) {
+            system("/scripts/enable-ssh.sh 0");
+            if (ip_label_container != NULL)
+                lv_obj_add_flag(ip_label_container, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(ssh_btn_label, "Enable SSH");
+        }
+    } else {
+        if (stat("/scripts/enable-ssh.sh", &buffer) == 0) {
+            system("/scripts/enable-ssh.sh 1");
+
+            if (ip_label_container == NULL) {
+                /* IP Address label container */
+                ip_label_container = lv_obj_create(lv_scr_act());
+                lv_obj_set_width(ip_label_container, LV_PCT(100));
+                lv_obj_set_height(ip_label_container, LV_SIZE_CONTENT);
+                lv_obj_set_align(ip_label_container, LV_ALIGN_BOTTOM_MID);
+
+                /* IP Address label text */
+                ip_label = lv_label_create(ip_label_container);
+                lv_label_set_text(ip_label, "IP Address: 192.168.2.15");
+                lv_obj_align(ip_label, LV_ALIGN_BOTTOM_MID, 0, 0);
+            } else {
+                lv_obj_clear_flag(ip_label_container, LV_OBJ_FLAG_HIDDEN);
+            }
+            lv_label_set_text(ssh_btn_label, "Disable SSH");
+        }
+    }
+}
+
+static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event) {
+    LV_UNUSED(event);
+
+    /* Check both possible volume groups */
+    int result = -1;
+
+    if (volume_group_exists("/dev/droidian"))
+        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
+    if (result != 1 && volume_group_exists("/dev/furios"))
+        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
+
+    if (result == 1) {
+        enabling_ssh = false;
+        mounting_rootfs = true;
+        decrypt();
+    } else {
+        toggle_mount_rootfs();
+    }
 }
 
 static void restore_main_screen(void) {
@@ -1296,501 +1090,10 @@ static void open_terminal(void) {
 
 static void sigaction_handler(int signum) {
     LV_UNUSED(signum);
+    key_thread_running = false;
+    pthread_join(key_thread, NULL);
     terminal_reset_current_terminal();
     exit(0);
-}
-
-static void enable_ssh() {
-    struct stat buffer;
-
-    if (stat("/tmp/dropbear-enabled", &buffer) == 0) {
-        if (stat("/scripts/enable-ssh.sh", &buffer) == 0) {
-            system("/scripts/enable-ssh.sh 0");
-            if (ip_label_container != NULL)
-                lv_obj_add_flag(ip_label_container, LV_OBJ_FLAG_HIDDEN);
-            lv_label_set_text(ssh_btn_label, "Enable SSH");
-        }
-    } else {
-        if (stat("/scripts/enable-ssh.sh", &buffer) == 0) {
-            system("/scripts/enable-ssh.sh 1");
-
-            if (ip_label_container == NULL) {
-                /* IP Address label container */
-                ip_label_container = lv_obj_create(lv_scr_act());
-                lv_obj_set_width(ip_label_container, LV_PCT(100));
-                lv_obj_set_height(ip_label_container, LV_SIZE_CONTENT);
-                lv_obj_align(ip_label_container, LV_ALIGN_BOTTOM_MID, 0, -50);
-
-                /* IP Address label text */
-                ip_label = lv_label_create(ip_label_container);
-                lv_label_set_text(ip_label, "IP Address: 192.168.2.15");
-                lv_obj_align(ip_label, LV_ALIGN_BOTTOM_MID, 0, 0);
-            } else {
-                lv_obj_clear_flag(ip_label_container, LV_OBJ_FLAG_HIDDEN);
-            }
-            lv_label_set_text(ssh_btn_label, "Disable SSH");
-        }
-    }
-}
-
-static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
-    LV_UNUSED(event);
-
-    const char *lvm_device_path = "/dev/droidian/droidian-reserved";
-    size_t print_bytes = 64;
-    int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
-    if (result == 1) {
-        mounting_rootfs = false;
-        enabling_ssh = true;
-        decrypt();
-    } else {
-        enable_ssh();
-    }
-}
-
-static int check_root_mount(void) {
-    FILE *mtab = setmntent("/proc/mounts", "r");
-    struct mntent *mount;
-
-    if (!mtab)
-        return 0;
-
-    while ((mount = getmntent(mtab)) != NULL) {
-        if (strcmp(mount->mnt_dir, "/rootfs") == 0) {
-            endmntent(mtab);
-            return 1;
-        }
-    }
-
-    endmntent(mtab);
-    return 0;
-}
-
-static void toggle_mount_rootfs() {
-    struct stat buffer;
-    const char *mount_point = "/rootfs";
-    int mount_result;
-
-    if (check_root_mount()) {
-        if (umount(mount_point) == 0)
-            lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
-        return;
-    }
-
-    mkdir(mount_point, 0755);
-
-    /* First try droidian-droidian--rootfs */
-    if (stat("/dev/mapper/droidian-droidian--rootfs", &buffer) == 0) {
-        mount_result = mount("/dev/mapper/droidian-droidian--rootfs", mount_point, "ext4", 0, NULL);
-        if (mount_result == 0) {
-            lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
-            return;
-        }
-    }
-
-    /* If first mount failed, try droidian_encrypted */
-    if (stat("/dev/mapper/droidian_encrypted", &buffer) == 0) {
-        mount_result = mount("/dev/mapper/droidian_encrypted", mount_point, "ext4", 0, NULL);
-        if (mount_result == 0) {
-            lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
-            return;
-        }
-    }
-
-    /* If we get here, both mounts failed */
-    lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
-}
-
-static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event) {
-    LV_UNUSED(event);
-
-    const char *lvm_device_path = "/dev/droidian/droidian-reserved";
-    size_t print_bytes = 64;
-    int result = is_lv_encrypted_with_luks(lvm_device_path, print_bytes);
-    if (result == 1) {
-        enabling_ssh = false;
-        mounting_rootfs = true;
-        decrypt();
-    } else {
-        toggle_mount_rootfs();
-    }
-}
-
-static int read_int_from_file(const char *path, int default_value) {
-    FILE *file = fopen(path, "r");
-    if (file == NULL) {
-        printf("File not found: %s\n", path);
-        return default_value;
-    }
-
-    char buffer[20];
-    if (fgets(buffer, sizeof(buffer), file) != NULL) {
-        fclose(file);
-        buffer[strcspn(buffer, "\n")] = 0;
-
-        char *endptr;
-        long value = strtol(buffer, &endptr, 10);
-        if (*endptr == '\0' && value >= 0)
-            return (int)value;
-    }
-
-    fclose(file);
-    return default_value;
-}
-
-static int write_int_to_file(const char *path, int value) {
-    FILE *file = fopen(path, "w");
-    if (file == NULL) {
-        printf("Failed to open file for writing: %s (Error: %s)\n", path, strerror(errno));
-        return -1;
-    }
-
-    int result = fprintf(file, "%d", value);
-    fclose(file);
-
-    if (result < 0) {
-        printf("Failed to write to file: %s (Error: %s)\n", path, strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
-
-static int is_mounted(const char* mount_point) {
-    FILE* mtab = setmntent("/proc/mounts", "r");
-    struct mntent* entry;
-    int mounted = 0;
-
-    if (mtab == NULL) {
-        printf("Could not open /proc/mounts\n");
-        return 0;
-    }
-
-    while ((entry = getmntent(mtab)) != NULL) {
-        if (strcmp(entry->mnt_dir, mount_point) == 0) {
-            mounted = 1;
-            break;
-        }
-    }
-
-    endmntent(mtab);
-    return mounted;
-}
-
-static char* read_dt_compatible() {
-    FILE* file = fopen(DT_COMPATIBLE_PATH, "r");
-    if (file == NULL) {
-        printf("Error opening device tree file: %s\n", DT_COMPATIBLE_PATH);
-        return NULL;
-    }
-
-    char buffer[512] = {0};
-    size_t bytes_read = fread(buffer, 1, sizeof(buffer) - 1, file);
-    fclose(file);
-
-    if (bytes_read == 0) {
-        printf("Error reading device tree file or file is empty\n");
-        return NULL;
-    }
-
-    /* Device tree compatible strings are null-terminated
-     * We need to find the first entry which ends at the first null byte */
-    char* first_entry = malloc(bytes_read + 1);
-    if (first_entry == NULL) {
-        printf("Memory allocation failed\n");
-        return NULL;
-    }
-
-    /* Copy until first null byte */
-    size_t i;
-    for (i = 0; i < bytes_read && buffer[i] != '\0'; i++) {
-        first_entry[i] = buffer[i];
-    }
-
-    first_entry[i] = '\0';
-
-    return first_entry;
-}
-
-static void execute_ubports_action(void) {
-    printf("Executing UBports action\n");
-
-    struct stat st;
-
-    if (stat("/etc/plymouth", &st) != 0) {
-        printf("Creating /etc/plymouth directory\n");
-        if (mkdir("/etc/plymouth", 0755) != 0)
-            printf("Failed to create /etc/plymouth directory: %s\n", strerror(errno));
-    }
-
-    FILE* conf_file = fopen("/etc/plymouth/plymouthd.conf", "w");
-    if (conf_file != NULL) {
-        printf("Writing Plymouth configuration\n");
-        fprintf(conf_file, "[Daemon]\nTheme=ubports\n");
-        fclose(conf_file);
-    } else {
-        printf("Failed to write Plymouth configuration: %s\n", strerror(errno));
-    }
-
-    if (stat("/run/plymouth", &st) != 0) {
-        printf("Creating /run/plymouth directory\n");
-        if (mkdir("/run/plymouth", 0755) != 0)
-            printf("Failed to create /run/plymouth directory\n");
-    }
-
-    if (access("/usr/sbin/plymouthd", X_OK) == 0) {
-        printf("Starting plymouth daemon\n");
-        setenv("PLYMOUTH_FORCE_SCALE", "1", 1);
-        system("/usr/sbin/plymouthd --mode=boot --attach-to-session --pid-file=/run/plymouth/pid --ignore-serial-consoles --kernel-command-line \"splash plymouth.ignore-udev\"");
-    } else {
-        printf("/usr/sbin/plymouthd not found\n");
-    }
-
-    if (access("/usr/bin/plymouth", X_OK) == 0) {
-        printf("Showing plymouth splash\n");
-        setenv("PLYMOUTH_FORCE_SCALE", "1", 1);
-        system("/usr/bin/plymouth --show-splash");
-    } else {
-        printf("/usr/bin/plymouth not found\n");
-    }
-
-    printf("Creating symbolic link for cache\n");
-    unlink("/cache");
-    if (symlink("/ubuntu-userdata/cache", "/cache") != 0)
-        printf("Failed to create symbolic link to /cache: %s\n", strerror(errno));
-
-    if (access("/scripts/system-image-upgrader", X_OK) == 0) {
-        printf("Running system-image-upgrader\n");
-        system("/scripts/system-image-upgrader /cache/recovery/ubuntu_command");
-    } else {
-        printf("/scripts/system-image-upgrader not found\n");
-    }
-
-    reboot_device();
-}
-
-static int is_ubports_action(void) {
-    if (access("/furios-persist/bootman/ubuntu-userdata", F_OK) != 0) {
-        printf("UBports user data config does not exist\n");
-        return 0;
-    }
-
-
-    printf("Found UBports user data config file\n");
-
-    struct stat st;
-    if (stat("/dev/droidian/ubuntu-userdata", &st) != 0) {
-        printf("Partition path /dev/droidian/ubuntu-userdata does not exist\n");
-        return 0;
-    }
-
-    if (mkdir("/ubuntu-userdata", 0755) != 0 && errno != EEXIST) {
-        printf("Failed to create /ubuntu-userdata directory\n");
-        return 0;
-    }
-
-    if (is_mounted("/ubuntu-userdata")) {
-        printf("/ubuntu-userdata is already mounted\n");
-    } else {
-        if (mount("/dev/droidian/ubuntu-userdata", "/ubuntu-userdata", "ext4", 0, NULL) != 0) {
-            printf("Failed to mount /dev/droidian/ubuntu-userdata to /ubuntu-userdata\n");
-            return 0;
-        }
-        printf("Successfully mounted /dev/droidian/ubuntu-userdata to /ubuntu-userdata\n");
-    }
-
-    if (access("/ubuntu-userdata/cache/recovery/ubuntu_command", F_OK) != 0) {
-        printf("Ubuntu command file does not exist\n");
-        return 0;
-    }
-
-    printf("UBports action detected\n");
-    return 1;
-}
-
-static int mount_furios_persist(const char* partition) {
-    if (mkdir("/furios-persist", 0755) != 0 && errno != EEXIST) {
-        printf("Failed to create /furios-persist directory\n");
-        return 0;
-    }
-
-    if (is_mounted("/furios-persist")) {
-        printf("/furios-persist is already mounted\n");
-        return 1;
-    }
-
-    if (mount(partition, "/furios-persist", "ext4", 0, NULL) != 0) {
-        printf("Failed to mount %s to /furios-persist\n", partition);
-        return 0;
-    }
-
-    printf("Successfully mounted %s to /furios-persist\n", partition);
-    return 1;
-}
-
-static void init_button_navigation(int total_buttons) {
-    if (nav_buttons)
-        free(nav_buttons);
-
-    nav_buttons = calloc(total_buttons, sizeof(lv_obj_t *));
-    nav_button_count = total_buttons;
-    current_button_index = 0;
-
-    printf("Initialized navigation for %d buttons\n", total_buttons);
-}
-
-static void update_button_highlight(void) {
-    /* Remove highlight from all buttons first */
-    for (int i = 0; i < nav_button_count; i++) {
-        lv_obj_clear_state(nav_buttons[i], LV_STATE_FOCUSED);
-    }
-
-    /* Add highlight to current button */
-    lv_obj_add_state(nav_buttons[current_button_index], LV_STATE_FOCUSED);
-    printf("Button %d highlighted\n", current_button_index);
-}
-
-static int is_input_device(const char *path) {
-    int fd;
-    char name[256];
-
-    fd = open(path, O_RDONLY);
-    if (fd < 0)
-        return 0;
-
-    if (ioctl(fd, EVIOCGNAME(sizeof(name)), name) < 0) {
-        close(fd);
-        return 0;
-    }
-
-    close(fd);
-    return 1;
-}
-
-static int open_restricted(const char *path, int flags, void *user_data) {
-    (void)user_data;
-    int fd = open(path, flags);
-    return fd < 0 ? -errno : fd;
-}
-
-static void close_restricted(int fd, void *user_data) {
-    (void)user_data;
-    close(fd);
-}
-
-static const struct libinput_interface interface = {
-    .open_restricted = open_restricted,
-    .close_restricted = close_restricted,
-};
-
-static void *key_input_thread(void *arg) {
-    (void)arg;
-    struct libinput *li;
-    struct libinput_event *event;
-    int rc;
-
-    li = libinput_path_create_context(&interface, NULL);
-    if (!li) {
-        fprintf(stderr, "Failed to initialize libinput context\n");
-        return NULL;
-    }
-
-    DIR *dir;
-    struct dirent *entry;
-    char path[PATH_MAX];
-
-    dir = opendir("/dev/input");
-    if (!dir) {
-        fprintf(stderr, "Failed to open /dev/input directory\n");
-        libinput_unref(li);
-        return NULL;
-    }
-
-    int device_count = 0;
-
-    while ((entry = readdir(dir)) != NULL) {
-        if (strncmp(entry->d_name, "event", 5) == 0) {
-            snprintf(path, sizeof(path), "/dev/input/%s", entry->d_name);
-            if (is_input_device(path)) {
-                struct libinput_device *device;
-                device = libinput_path_add_device(li, path);
-                if (!device) {
-                    fprintf(stderr, "Failed to add device: %s\n", path);
-                } else {
-                    printf("Added input device: %s\n", path);
-                    device_count++;
-                }
-            }
-        }
-    }
-
-    closedir(dir);
-
-    if (device_count == 0) {
-        fprintf(stderr, "No input devices were added\n");
-        libinput_unref(li);
-        return NULL;
-    }
-
-    printf("Monitoring %d input devices for key events\n", device_count);
-
-    libinput_dispatch(li);
-
-    while (key_thread_running) {
-        int fd = libinput_get_fd(li);
-        fd_set fds;
-
-        FD_ZERO(&fds);
-        FD_SET(fd, &fds);
-
-        rc = select(fd + 1, &fds, NULL, NULL, NULL);
-        if (rc < 0 && errno != EINTR) {
-            fprintf(stderr, "select() failed: %s\n", strerror(errno));
-            break;
-        }
-
-        if (rc > 0 && FD_ISSET(fd, &fds)) {
-            libinput_dispatch(li);
-
-            while ((event = libinput_get_event(li))) {
-                if (libinput_event_get_type(event) == LIBINPUT_EVENT_KEYBOARD_KEY) {
-                    struct libinput_event_keyboard *key_event;
-                    enum libinput_key_state state;
-                    uint32_t key;
-
-                    key_event = libinput_event_get_keyboard_event(event);
-                    key = libinput_event_keyboard_get_key(key_event);
-                    state = libinput_event_keyboard_get_key_state(key_event);
-
-                    struct libinput_device *device = libinput_event_get_device(event);
-                    const char *device_name = libinput_device_get_name(device);
-
-                    printf("Key event from '%s': key=%d, state=%d\n",
-                           device_name, key, state);
-                    if (state == LIBINPUT_KEY_STATE_PRESSED) {
-                        switch (key) {
-                            case KEY_VOLUMEUP:
-                                current_button_index = (current_button_index + nav_button_count - 1) % nav_button_count;
-                                update_button_highlight();
-                                break;
-                            case KEY_VOLUMEDOWN:
-                                current_button_index = (current_button_index + 1) % nav_button_count;
-                                update_button_highlight();
-                                break;
-                            case KEY_POWER:
-                                if (nav_buttons[current_button_index])
-                                    lv_event_send(nav_buttons[current_button_index], LV_EVENT_CLICKED, NULL);
-                                break;
-                        }
-                    }
-                }
-                libinput_event_destroy(event);
-            }
-        }
-    }
-
-    libinput_unref(li);
-    return NULL;
 }
 
 static void create_buttons(lv_obj_t *label_container) {
@@ -1848,7 +1151,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, 600);
     lv_obj_set_flex_flow(reboot_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(reboot_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = reboot_btn;
+    register_nav_button(reboot_btn, btn_index++);
 
     /* Shutdown button */
     shutdown_btn = lv_btn_create(label_container);
@@ -1860,7 +1163,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(shutdown_btn, LV_ALIGN_TOP_MID, 0, 700);
     lv_obj_set_flex_flow(shutdown_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(shutdown_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = shutdown_btn;
+    register_nav_button(shutdown_btn, btn_index++);
 
     /* Factory reset button */
     factory_reset_btn = lv_btn_create(label_container);
@@ -1872,7 +1175,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(factory_reset_btn, LV_ALIGN_TOP_MID, 0, 800);
     lv_obj_set_flex_flow(factory_reset_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(factory_reset_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = factory_reset_btn;
+    register_nav_button(factory_reset_btn, btn_index++);
 
     /* Theme toggle button */
     theme_btn = lv_btn_create(label_container);
@@ -1884,7 +1187,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(theme_btn, LV_ALIGN_TOP_MID, 0, 900);
     lv_obj_set_flex_flow(theme_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(theme_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = theme_btn;
+    register_nav_button(theme_btn, btn_index++);
 
     /* Terminal button */
     terminal_btn = lv_btn_create(label_container);
@@ -1896,7 +1199,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 1000);
     lv_obj_set_flex_flow(terminal_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(terminal_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = terminal_btn;
+    register_nav_button(terminal_btn, btn_index++);
 
     /* SSH toggle button */
     ssh_btn = lv_btn_create(label_container);
@@ -1914,7 +1217,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1100);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = ssh_btn;
+    register_nav_button(ssh_btn, btn_index++);
 
     /* Mount rootfs toggle button */
     mount_rootfs_btn = lv_btn_create(label_container);
@@ -1922,7 +1225,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_set_height(mount_rootfs_btn, 100);
     mount_rootfs_btn_label = lv_label_create(mount_rootfs_btn);
 
-    if (check_root_mount())
+    if (is_mounted("/rootfs"))
         lv_label_set_text(mount_rootfs_btn_label, "Unmount rootfs");
     else
         lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
@@ -1931,7 +1234,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_obj_align(mount_rootfs_btn, LV_ALIGN_TOP_MID, 0, 1200);
     lv_obj_set_flex_flow(mount_rootfs_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(mount_rootfs_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    nav_buttons[btn_index++] = mount_rootfs_btn;
+    register_nav_button(mount_rootfs_btn, btn_index++);
 
     /* Highlight the first button by default */
     update_button_highlight();
@@ -2071,9 +1374,21 @@ static void initialize_recovery_ui(void) {
     lv_style_set_border_width(&style_focus, 3);
     lv_style_set_border_color(&style_focus, lv_palette_main(LV_PALETTE_YELLOW));
     lv_style_set_border_opa(&style_focus, LV_OPA_COVER);
-    for (int i = 0; i < nav_button_count; i++) {
-        if (nav_buttons[i])
-            lv_obj_add_style(nav_buttons[i], &style_focus, LV_STATE_FOCUSED);
+
+    for (int i = 0; i < 7; i++) { /* 7 is the number of navigation buttons */
+        lv_obj_t *nav_btn = NULL;
+        switch (i) {
+            case 0: nav_btn = reboot_btn; break;
+            case 1: nav_btn = shutdown_btn; break;
+            case 2: nav_btn = factory_reset_btn; break;
+            case 3: nav_btn = theme_btn; break;
+            case 4: nav_btn = terminal_btn; break;
+            case 5: nav_btn = ssh_btn; break;
+            case 6: nav_btn = mount_rootfs_btn; break;
+        }
+        if (nav_btn) {
+            lv_obj_add_style(nav_btn, &style_focus, LV_STATE_FOCUSED);
+        }
     }
 }
 
