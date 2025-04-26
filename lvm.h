@@ -1,5 +1,5 @@
 /**
- * Copyright 2024 Bardia Moshiri
+ * Copyright 2025 Bardia Moshiri
  *
  * This file is part of furios-recovery, hereafter referred to as the program.
  *
@@ -22,8 +22,44 @@
 
 #include <stdlib.h>
 
+/* Droidian/FuriOS VG identifiers for functions that take vg_type parameter */
+#define VG_AUTO_DETECT 0
+#define VG_DROIDIAN    1
+#define VG_FURIOS      2
+
+/**
+ * Check if a volume group exists
+ *
+ * @param vg_path Path to the volume group
+ * @return 1 if exists, 0 if not
+ */
+int volume_group_exists(const char *vg_path);
+
+/**
+ * Check if LV is encrypted with LUKS
+ *
+ * @param device_path path to the logical volume to check (can be NULL to auto-detect)
+ * @param print_bytes number of bytes to read for checking
+ * @return 1 if encrypted, 0 if not, -1 on error
+ */
 int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes);
-int mount_luks_lvm(const char *passphrase);
-int mount_luks_lvm_droidian_helper(const char *passphrase);
+
+/**
+ * Mount LUKS LVM with support for both Droidian and FuriOS VGs
+ *
+ * @param passphrase The passphrase to use for decryption
+ * @param vg_type VG type: 0=auto-detect, 1=droidian, 2=furios
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE or error code on failure
+ */
+int mount_luks_lvm(const char *passphrase, int vg_type);
+
+/**
+ * Helper function for mounting LUKS LVM with droidian/furios helper utility
+ *
+ * @param passphrase The passphrase to use for decryption
+ * @param vg_type VG type: 0=auto-detect, 1=droidian, 2=furios
+ * @return EXIT_SUCCESS on success, EXIT_FAILURE or error code on failure
+ */
+int mount_luks_lvm_helper(const char *passphrase, int vg_type);
 
 #endif // LVM_H

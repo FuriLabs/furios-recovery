@@ -1,4 +1,4 @@
-# Copyright 2021 Clayton Craft
+# Copyright 2025 Bardia Moshiri
 #
 # This file is part of furios-recovery, hereafter referred to as the program.
 #
@@ -19,7 +19,7 @@
 project(
   'furios-recovery',
   'c',
-  version: '0.1.0',
+  version: '1.0.0',
   default_options: 'warning_level=3',
   meson_version: '>=0.53.0'
 )
@@ -35,12 +35,16 @@ furios_recovery_sources = [
   'cursor.c',
   'font_32.c',
   'indev.c',
+  'recovery_libinput.c',
+  'lvm.c',
   'main.c',
+  'persist.c',
+  'reset.c',
   'sq2lv_layouts.c',
   'terminal.c',
   'theme.c',
   'themes.c',
-  'lvm.c',
+  'utils.c',
   'images/furilabs_black.c',
   'images/furilabs_white.c',
 ]
