@@ -810,6 +810,7 @@ static void enable_ssh() {
                 lv_obj_set_width(ip_label_container, LV_PCT(100));
                 lv_obj_set_height(ip_label_container, LV_SIZE_CONTENT);
                 lv_obj_set_align(ip_label_container, LV_ALIGN_BOTTOM_MID);
+                lv_obj_set_style_pad_bottom(ip_label_container, 50, LV_PART_MAIN);
 
                 /* IP Address label text */
                 ip_label = lv_label_create(ip_label_container);
