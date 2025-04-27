@@ -35,11 +35,11 @@ int drop_caches(void);
 int factory_reset(void);
 
 /**
- * Find and flash boot/dtbo images from a mounted rootfs
+ * Find and flash all images from a mounted rootfs
  *
  * @param mount_path Path where the rootfs is mounted
  * @param slot_suffix Current slot suffix for A/B devices
  */
-void find_boot_images(const char *mount_path, const char *slot_suffix);
+void flash_images(const char *mount_path, const char *slot_suffix);
 
 #endif // RESET_H

@@ -159,7 +159,7 @@ int factory_reset(void) {
                 return -1;
             }
 
-            find_boot_images("/rootfs_mnt", slot_suffix);
+            flash_images("/rootfs_mnt", slot_suffix);
             umount("/rootfs_mnt");
         } else if (volume_group_exists("/dev/furios") &&
                    stat("/dev/mapper/furios-furios--rootfs", &buffer) == 0) {
@@ -173,10 +173,10 @@ int factory_reset(void) {
                 return -1;
             }
 
-            find_boot_images("/rootfs_mnt", slot_suffix);
+            flash_images("/rootfs_mnt", slot_suffix);
             umount("/rootfs_mnt");
         } else {
-            printf("No LVM volume groups found for boot images\n");
+            printf("No LVM volume groups found to flash images\n");
         }
     }
 
@@ -186,12 +186,14 @@ int factory_reset(void) {
     return 0;
 }
 
-void find_boot_images(const char *mount_path, const char *slot_suffix) {
+void flash_images(const char *mount_path, const char *slot_suffix) {
     char bootimg_file[256] = "";
     char dtboimg_file[256] = "";
+    char vendorimg_path[PATH_MAX];
     char boot_dir_path[PATH_MAX];
-    char cmd[1024];
+    char cmd[5120];
     int result;
+    struct stat buffer;
 
     snprintf(boot_dir_path, sizeof(boot_dir_path), "%s/boot", mount_path);
     DIR *dir = opendir(boot_dir_path);
@@ -258,5 +260,42 @@ void find_boot_images(const char *mount_path, const char *slot_suffix) {
         }
     } else {
         printf("Failed to find dtbo image in %s\n", mount_path);
+    }
+
+    snprintf(vendorimg_path, sizeof(vendorimg_path), "%s/usr/share/vendor-image/vendor.img", mount_path);
+    if (stat(vendorimg_path, &buffer) == 0) {
+        printf("Found vendor.img, attempting to flash\n");
+        int flashed = 0;
+
+        if (stat("/dev/mapper/dynpart-vendor_a", &buffer) == 0) {
+            snprintf(cmd, sizeof(cmd),
+                     "dd if=\"%s\" of=/dev/mapper/dynpart-vendor_a bs=4M",
+                     vendorimg_path);
+            result = system(cmd);
+            if (result != 0) {
+                printf("Failed to flash vendor.img to dynpart-vendor_a\n");
+            } else {
+                printf("Flashed vendor.img to dynpart-vendor_a\n");
+                flashed = 1;
+            }
+        }
+
+        if (stat("/dev/mapper/dynpart-vendor_b", &buffer) == 0) {
+            snprintf(cmd, sizeof(cmd),
+                     "dd if=\"%s\" of=/dev/mapper/dynpart-vendor_b bs=4M",
+                     vendorimg_path);
+            result = system(cmd);
+            if (result != 0) {
+                printf("Failed to flash vendor.img to dynpart-vendor_b\n");
+            } else {
+                printf("Flashed vendor.img to dynpart-vendor_b\n");
+                flashed = 1;
+            }
+        }
+
+        if (!flashed)
+            printf("vendor.img found but no dynpart-vendor_a or dynpart-vendor_b exists\n");
+    } else {
+        printf("No vendor.img found under %s, skipping vendor flash\n", mount_path);
     }
 }
