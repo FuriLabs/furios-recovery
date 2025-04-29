@@ -54,7 +54,7 @@ int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes);
 int mount_luks_lvm(const char *passphrase, int vg_type);
 
 /**
- * Helper function for mounting LUKS LVM with droidian/furios helper utility
+ * Helper function for mounting LUKS LVM
  *
  * @param passphrase The passphrase to use for decryption
  * @param vg_type VG type: 0=auto-detect, 1=droidian, 2=furios

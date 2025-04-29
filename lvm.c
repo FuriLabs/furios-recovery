@@ -18,6 +18,7 @@
  */
 
 #include "lvm.h"
+#include "utils.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,7 +119,8 @@ int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes) {
 
     close(fd);
     free(buffer);
-    if (temp_device) free(temp_device);
+    if (temp_device)
+        free(temp_device);
 
     return result;
 }
@@ -135,11 +137,9 @@ int mount_luks_lvm(const char *passphrase, int vg_type) {
         if (volume_group_exists("/dev/droidian")) {
             device_path = DROIDIAN_DEVICE;
             name = DROIDIAN_NAME;
-            vg_type = 1;
         } else if (volume_group_exists("/dev/furios")) {
             device_path = FURIOS_DEVICE;
             name = FURIOS_NAME;
-            vg_type = 2;
         } else {
             fprintf(stderr, "No valid volume group found\n");
             return EXIT_FAILURE;
@@ -182,6 +182,7 @@ int mount_luks_lvm(const char *passphrase, int vg_type) {
     return EXIT_SUCCESS;
 }
 
+
 int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
     if (passphrase == NULL || strlen(passphrase) >= PASSPHRASE_MAX)
         return EXIT_FAILURE;
@@ -189,7 +190,7 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
     const char *device_path;
     const char *header_path;
     const char *name;
-    const char *helper_name;
+    char *helper_path = NULL;
 
     /* Determine which VG to use */
     if (vg_type == 0) {
@@ -198,13 +199,11 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
             device_path = DROIDIAN_DEVICE;
             header_path = DROIDIAN_HEADER;
             name = DROIDIAN_NAME;
-            helper_name = "droidian-encryption-helper";
             vg_type = 1;
         } else if (volume_group_exists("/dev/furios")) {
             device_path = FURIOS_DEVICE;
             header_path = FURIOS_HEADER;
             name = FURIOS_NAME;
-            helper_name = "furios-encryption-helper";
             vg_type = 2;
         } else {
             fprintf(stderr, "No valid volume group found\n");
@@ -214,31 +213,23 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
         device_path = DROIDIAN_DEVICE;
         header_path = DROIDIAN_HEADER;
         name = DROIDIAN_NAME;
-        helper_name = "droidian-encryption-helper";
     } else if (vg_type == 2) {
         device_path = FURIOS_DEVICE;
         header_path = FURIOS_HEADER;
         name = FURIOS_NAME;
-        helper_name = "furios-encryption-helper";
     } else {
         fprintf(stderr, "Invalid volume group selection\n");
         return EXIT_FAILURE;
     }
 
-    /* Check if helper exists */
-    char helper_path[256];
-    snprintf(helper_path, sizeof(helper_path), "/usr/bin/%s", helper_name);
-
-    struct stat st;
-    if (stat(helper_path, &st) != 0) {
-        /* If specific helper doesn't exist, fall back to droidian helper */
-        if (vg_type == 2) {
+    const char *helper_name = NULL;
+    helper_path = find_binary("crypted-helper");
+    if (helper_path != NULL) {
+        helper_name = "crypted-helper";
+    } else {
+        helper_path = find_binary("droidian-encryption-helper");
+        if (helper_path != NULL) {
             helper_name = "droidian-encryption-helper";
-            snprintf(helper_path, sizeof(helper_path), "/usr/bin/%s", helper_name);
-            if (stat(helper_path, &st) != 0) {
-                fprintf(stderr, "No encryption helper found\n");
-                return EXIT_FAILURE;
-            }
         } else {
             fprintf(stderr, "No encryption helper found\n");
             return EXIT_FAILURE;
@@ -272,7 +263,6 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
                "--name", name,
                "--strip-newlines",
                (char *)NULL);
-
         perror("execlp");
         return EXIT_FAILURE;
     } else {
@@ -282,12 +272,10 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
 
         int status;
         waitpid(pid, &status, 0);
-
         if (WIFEXITED(status)) {
             int exit_code = WEXITSTATUS(status);
-            if (exit_code == 2) {
+            if (exit_code == 2)
                 return 2;
-            }
             return exit_code == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
         } else {
             return EXIT_FAILURE;

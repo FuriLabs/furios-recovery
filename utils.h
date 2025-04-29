@@ -53,4 +53,12 @@ int is_mounted(const char* mount_point);
  */
 char* read_dt_compatible(void);
 
+/**
+ * Find a binary in common executable paths
+ *
+ * @param binary_name The name of the binary to find
+ * @return Full path to the binary or NULL if not found
+ */
+char* find_binary(const char *binary_name);
+
 #endif // UTILS_H

@@ -123,3 +123,18 @@ char* read_dt_compatible() {
 
     return first_entry;
 }
+
+char* find_binary(const char *binary_name) {
+    const char *paths[] = {"/usr/bin", "/usr/sbin", "/bin", "/sbin"};
+    static char full_path[256];
+
+    for (int i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+        snprintf(full_path, sizeof(full_path), "%s/%s", paths[i], binary_name);
+
+        struct stat st;
+        if (stat(full_path, &st) == 0 && (st.st_mode & S_IXUSR))
+            return full_path;
+    }
+
+    return NULL;
+}
