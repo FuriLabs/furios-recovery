@@ -127,8 +127,9 @@ char* read_dt_compatible() {
 char* find_binary(const char *binary_name) {
     const char *paths[] = {"/usr/bin", "/usr/sbin", "/bin", "/sbin"};
     static char full_path[256];
+    const int num_paths = 4;
 
-    for (int i = 0; i < sizeof(paths) / sizeof(paths[0]); i++) {
+    for (int i = 0; i < num_paths; i++) {
         snprintf(full_path, sizeof(full_path), "%s/%s", paths[i], binary_name);
 
         struct stat st;
