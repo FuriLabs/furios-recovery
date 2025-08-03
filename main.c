@@ -1094,6 +1094,12 @@ static void sigaction_handler(int signum) {
     key_thread_running = false;
     pthread_join(key_thread, NULL);
     terminal_reset_current_terminal();
+
+    if (buf) {
+        free(buf);
+        buf = NULL;
+    }
+
     exit(0);
 }
 
