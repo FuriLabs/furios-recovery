@@ -1104,6 +1104,23 @@ static void sigaction_handler(int signum) {
 }
 
 static void create_buttons(lv_obj_t *label_container) {
+    uint32_t screen_height = lv_obj_get_height(lv_scr_act());
+    uint32_t screen_width = lv_obj_get_width(lv_scr_act());
+
+    int button_height = (int)(screen_height / 16);  /* About 6% of screen height */
+    button_height = LV_MAX(60, LV_MIN(button_height, 100));  /* Between 60-100px */
+
+    int button_width_pct = 100;  /* Default to full width */
+    int max_button_width = (int)(screen_width * 0.9);  /* 90% of screen width max */
+
+    int slider_top_margin;
+    /* Get logo's bottom position */
+    lv_coord_t logo_y = lv_obj_get_y(images[0]);
+    lv_coord_t logo_height = lv_obj_get_height(images[0]);
+    slider_top_margin = logo_y + logo_height + 40;  /* 40px gap below logo */
+
+    int button_spacing = LV_MAX(8, (int)(screen_height / 160));
+
     /* Brightness slider */
     brightness_slider = lv_slider_create(label_container);
     lv_obj_set_width(brightness_slider, LV_PCT(100));
@@ -1116,7 +1133,7 @@ static void create_buttons(lv_obj_t *label_container) {
     lv_slider_set_value(brightness_slider, current_brightness, LV_ANIM_OFF);
 
     lv_obj_add_event_cb(brightness_slider, brightness_slider_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, 520);
+    lv_obj_align(brightness_slider, LV_ALIGN_TOP_MID, 0, slider_top_margin);
 
     static lv_style_t style_slider;
     lv_style_init(&style_slider);
@@ -1148,70 +1165,79 @@ static void create_buttons(lv_obj_t *label_container) {
     init_button_navigation(7);
     int btn_index = 0;
 
+    /* Calculate starting position for buttons */
+    int button_start_y = slider_top_margin + 80;  /* Start below slider */
+
     /* Reboot button */
     reboot_btn = lv_btn_create(label_container);
-    lv_obj_set_width(reboot_btn, LV_PCT(100));
-    lv_obj_set_height(reboot_btn, 100);
+    lv_obj_set_width(reboot_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(reboot_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(reboot_btn, button_height);
     lv_obj_t *reboot_btn_label = lv_label_create(reboot_btn);
     lv_label_set_text(reboot_btn_label, "Reboot");
     lv_obj_add_event_cb(reboot_btn, reboot_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, 600);
+    lv_obj_align(reboot_btn, LV_ALIGN_TOP_MID, 0, button_start_y);
     lv_obj_set_flex_flow(reboot_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(reboot_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(reboot_btn, btn_index++);
 
     /* Shutdown button */
     shutdown_btn = lv_btn_create(label_container);
-    lv_obj_set_width(shutdown_btn, LV_PCT(100));
-    lv_obj_set_height(shutdown_btn, 100);
+    lv_obj_set_width(shutdown_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(shutdown_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(shutdown_btn, button_height);
     lv_obj_t *shutdown_btn_label = lv_label_create(shutdown_btn);
     lv_label_set_text(shutdown_btn_label, "Shutdown");
     lv_obj_add_event_cb(shutdown_btn, shutdown_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(shutdown_btn, LV_ALIGN_TOP_MID, 0, 700);
+    lv_obj_align_to(shutdown_btn, reboot_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(shutdown_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(shutdown_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(shutdown_btn, btn_index++);
 
     /* Factory reset button */
     factory_reset_btn = lv_btn_create(label_container);
-    lv_obj_set_width(factory_reset_btn, LV_PCT(100));
-    lv_obj_set_height(factory_reset_btn, 100);
+    lv_obj_set_width(factory_reset_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(factory_reset_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(factory_reset_btn, button_height);
     lv_obj_t *factory_reset_btn_label = lv_label_create(factory_reset_btn);
     lv_label_set_text(factory_reset_btn_label, "Factory Reset");
     lv_obj_add_event_cb(factory_reset_btn, factory_reset_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(factory_reset_btn, LV_ALIGN_TOP_MID, 0, 800);
+    lv_obj_align_to(factory_reset_btn, shutdown_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(factory_reset_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(factory_reset_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(factory_reset_btn, btn_index++);
 
     /* Theme toggle button */
     theme_btn = lv_btn_create(label_container);
-    lv_obj_set_width(theme_btn, LV_PCT(100));
-    lv_obj_set_height(theme_btn, 100);
+    lv_obj_set_width(theme_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(theme_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(theme_btn, button_height);
     lv_obj_t *theme_btn_label = lv_label_create(theme_btn);
     lv_label_set_text(theme_btn_label, "Toggle Theme");
     lv_obj_add_event_cb(theme_btn, toggle_theme_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(theme_btn, LV_ALIGN_TOP_MID, 0, 900);
+    lv_obj_align_to(theme_btn, factory_reset_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(theme_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(theme_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(theme_btn, btn_index++);
 
     /* Terminal button */
     terminal_btn = lv_btn_create(label_container);
-    lv_obj_set_width(terminal_btn, LV_PCT(100));
-    lv_obj_set_height(terminal_btn, 100);
+    lv_obj_set_width(terminal_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(terminal_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(terminal_btn, button_height);
     lv_obj_t *terminal_btn_label = lv_label_create(terminal_btn);
     lv_label_set_text(terminal_btn_label, "Terminal");
     lv_obj_add_event_cb(terminal_btn, terminal_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(terminal_btn, LV_ALIGN_TOP_MID, 0, 1000);
+    lv_obj_align_to(terminal_btn, theme_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(terminal_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(terminal_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(terminal_btn, btn_index++);
 
     /* SSH toggle button */
     ssh_btn = lv_btn_create(label_container);
-    lv_obj_set_width(ssh_btn, LV_PCT(100));
-    lv_obj_set_height(ssh_btn, 100);
+    lv_obj_set_width(ssh_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(ssh_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(ssh_btn, button_height);
     ssh_btn_label = lv_label_create(ssh_btn);
 
     struct stat buffer;
@@ -1221,15 +1247,16 @@ static void create_buttons(lv_obj_t *label_container) {
         lv_label_set_text(ssh_btn_label, "Enable SSH");
 
     lv_obj_add_event_cb(ssh_btn, toggle_ssh_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(ssh_btn, LV_ALIGN_TOP_MID, 0, 1100);
+    lv_obj_align_to(ssh_btn, terminal_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(ssh_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(ssh_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(ssh_btn, btn_index++);
 
     /* Mount rootfs toggle button */
     mount_rootfs_btn = lv_btn_create(label_container);
-    lv_obj_set_width(mount_rootfs_btn, LV_PCT(100));
-    lv_obj_set_height(mount_rootfs_btn, 100);
+    lv_obj_set_width(mount_rootfs_btn, LV_PCT(button_width_pct));
+    lv_obj_set_style_max_width(mount_rootfs_btn, max_button_width, LV_PART_MAIN);
+    lv_obj_set_height(mount_rootfs_btn, button_height);
     mount_rootfs_btn_label = lv_label_create(mount_rootfs_btn);
 
     if (is_mounted("/rootfs"))
@@ -1238,7 +1265,7 @@ static void create_buttons(lv_obj_t *label_container) {
         lv_label_set_text(mount_rootfs_btn_label, "Mount rootfs");
 
     lv_obj_add_event_cb(mount_rootfs_btn, toggle_mount_rootfs_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_align(mount_rootfs_btn, LV_ALIGN_TOP_MID, 0, 1200);
+    lv_obj_align_to(mount_rootfs_btn, ssh_btn, LV_ALIGN_OUT_BOTTOM_MID, 0, button_spacing);
     lv_obj_set_flex_flow(mount_rootfs_btn, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(mount_rootfs_btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     register_nav_button(mount_rootfs_btn, btn_index++);
@@ -1251,27 +1278,34 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     /* Clear the screen */
     lv_obj_clean(lv_scr_act());
 
-    /* Prevent scrolling when keyboard is off-screen */
-    lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+    /* Enable scrolling for the main screen */
+    lv_obj_add_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Figure out a few numbers for sizing and positioning */
     const int keyboard_height = ver_res > hor_res ? ver_res / 3 : ver_res / 2;
-    const int padding = keyboard_height / 8;
-    const int label_width = hor_res - 2 * padding;
+
+    /* Use smaller, responsive padding */
+    int padding_calc1 = (int)(keyboard_height / 8);
+    int padding_calc2 = (int)(hor_res / 20);
+    const int padding = LV_MIN(padding_calc1, padding_calc2);
+    const int label_width = (int)hor_res - 2 * padding;
 
     /* Main flexbox */
     lv_obj_t *container = lv_obj_create(lv_scr_act());
     lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_size(container, LV_PCT(100), ver_res - keyboard_height);
+    lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_size(container, LV_PCT(100), LV_SIZE_CONTENT);
     lv_obj_set_pos(container, 0, 0);
     lv_obj_set_style_pad_row(container, padding, LV_PART_MAIN);
+    lv_obj_set_style_pad_top(container, padding, LV_PART_MAIN);
     lv_obj_set_style_pad_bottom(container, padding, LV_PART_MAIN);
 
     /* Label container */
     lv_obj_t *label_container = lv_obj_create(container);
-    lv_obj_set_size(label_container, label_width, LV_PCT(100));
-    lv_obj_set_flex_grow(label_container, 1);
+    lv_obj_set_size(label_container, label_width, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(label_container, padding, LV_PART_MAIN);
+
+    /* Enable scrolling for label container on smaller screens */
+    lv_obj_add_flag(label_container, LV_OBJ_FLAG_SCROLLABLE);
 
     /* FuriOS label container */
     lv_obj_t *furios_label_container = lv_obj_create(lv_scr_act());
@@ -1288,11 +1322,18 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     for (int i = 0; i < NUM_IMAGES; i++)
         images[i] = lv_img_create(lv_scr_act());
 
-    /* Furi Labs logo */
-    lv_obj_align(images[0], LV_ALIGN_TOP_MID, 0, 100);
-
     /* Set image mode */
     update_image_mode(is_alternate_theme);
+
+    /* Set logo width to match brightness slider width */
+    lv_obj_set_width(images[0], label_width);
+
+    /* Position logo */
+    int logo_top_margin = LV_MIN(100, (int)(ver_res / 16));
+    lv_obj_align(images[0], LV_ALIGN_TOP_MID, 0, logo_top_margin);
+
+    /* Force LVGL to update the layout so height is recalculated */
+    lv_obj_update_layout(images[0]);
 
     /* Create buttons */
     create_buttons(label_container);
