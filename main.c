@@ -958,7 +958,7 @@ static void decrypt(void) {
     /* Reveal / obscure password button */
     toggle_pw_btn = lv_btn_create(textarea_container);
     const int textarea_height = lv_obj_get_height(textarea);
-    lv_obj_set_size(toggle_pw_btn, textarea_height, textarea_height);
+    lv_obj_set_size(toggle_pw_btn, textarea_height * 0.70f, textarea_height * 0.70f);
     lv_obj_t *toggle_pw_btn_label = lv_label_create(toggle_pw_btn);
     lv_obj_center(toggle_pw_btn_label);
     lv_label_set_text(toggle_pw_btn_label, LV_SYMBOL_EYE_OPEN);
@@ -966,7 +966,7 @@ static void decrypt(void) {
 
     /* Show / hide keyboard button */
     toggle_kb_btn = lv_btn_create(textarea_container);
-    lv_obj_set_size(toggle_kb_btn, textarea_height, textarea_height);
+    lv_obj_set_size(toggle_kb_btn, textarea_height * 0.70f, textarea_height * 0.70f);
     lv_obj_add_event_cb(toggle_kb_btn, toggle_kb_btn_clicked_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toggle_kb_btn_label = lv_label_create(toggle_kb_btn);
     lv_label_set_text(toggle_kb_btn_label, LV_SYMBOL_KEYBOARD);
