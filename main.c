@@ -85,24 +85,27 @@ bool enabling_ssh = false;
 bool mounting_rootfs = false;
 
 /* Main page */
+lv_obj_t *container = NULL;
+lv_obj_t *label_container = NULL;
+lv_obj_t *furios_label_container = NULL;
+lv_obj_t *furios_label = NULL;
 lv_obj_t *keyboard = NULL;
 lv_obj_t *ip_label_container = NULL;
 lv_obj_t *ip_label = NULL;
-lv_obj_t *reboot_btn;
-lv_obj_t *shutdown_btn;
-lv_obj_t *factory_reset_btn;
-lv_obj_t *theme_btn;
-lv_obj_t *ssh_btn;
-lv_obj_t *ssh_btn_label;
-lv_obj_t *mount_rootfs_btn;
-lv_obj_t *mount_rootfs_btn_label;
-lv_obj_t *terminal_btn;
-lv_obj_t *brightness_slider;
-lv_obj_t *brightness_label;
+lv_obj_t *reboot_btn = NULL;
+lv_obj_t *shutdown_btn = NULL;
+lv_obj_t *factory_reset_btn = NULL;
+lv_obj_t *theme_btn = NULL;
+lv_obj_t *ssh_btn = NULL;
+lv_obj_t *ssh_btn_label = NULL;
+lv_obj_t *mount_rootfs_btn = NULL;
+lv_obj_t *mount_rootfs_btn_label = NULL;
+lv_obj_t *terminal_btn = NULL;
+lv_obj_t *brightness_slider = NULL;
+lv_obj_t *brightness_label = NULL;
 
 /* Decryption page */
 lv_obj_t *decrypt_container = NULL;
-lv_obj_t *label_container = NULL;
 lv_obj_t *spangroup = NULL;
 lv_obj_t *textarea_container = NULL;
 lv_obj_t *textarea = NULL;
@@ -846,33 +849,12 @@ static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event) {
 }
 
 static void restore_main_screen(void) {
+    /* Hide all decrypt page widgets */
+    lv_obj_add_flag(decrypt_container, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(keyboard, LV_OBJ_FLAG_HIDDEN);
+
     /* Show all main window widgets */
-    lv_obj_clear_flag(reboot_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(shutdown_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(factory_reset_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(mount_rootfs_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(brightness_slider, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_clear_flag(brightness_label, LV_OBJ_FLAG_HIDDEN);
-
-    /* Delete all decrypt screen elements */
-    if (decrypt_container != NULL) {
-        lv_obj_del(decrypt_container);
-        decrypt_container = NULL;
-        label_container = NULL;
-        spangroup = NULL;
-        textarea_container = NULL;
-        textarea = NULL;
-        toggle_pw_btn = NULL;
-        toggle_kb_btn = NULL;
-    }
-
-    if (keyboard != NULL) {
-        lv_obj_del(keyboard);
-        keyboard = NULL;
-    }
+    lv_obj_clear_flag(container, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void decrypt(void) {
@@ -910,15 +892,7 @@ static void decrypt(void) {
     const int textarea_container_max_width = LV_MIN(hor_res, ver_res);
 
     /* Hide everything from the main window */
-    lv_obj_add_flag(reboot_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(shutdown_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(factory_reset_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(theme_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(terminal_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(ssh_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(mount_rootfs_btn, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(brightness_slider, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(brightness_label, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(container, LV_OBJ_FLAG_HIDDEN);
 
     /* Main flexbox */
     decrypt_container = lv_obj_create(lv_scr_act());
@@ -1289,7 +1263,7 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     const int label_width = (int)hor_res - 2 * padding;
 
     /* Main flexbox */
-    lv_obj_t *container = lv_obj_create(lv_scr_act());
+    container = lv_obj_create(lv_scr_act());
     lv_obj_set_flex_flow(container, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(container, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_size(container, LV_PCT(100), LV_SIZE_CONTENT);
@@ -1299,18 +1273,18 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     lv_obj_set_style_pad_bottom(container, padding, LV_PART_MAIN);
 
     /* Label container */
-    lv_obj_t *label_container = lv_obj_create(container);
+    label_container = lv_obj_create(container);
     lv_obj_set_size(label_container, label_width, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(label_container, padding, LV_PART_MAIN);
 
     /* FuriOS label container */
-    lv_obj_t *furios_label_container = lv_obj_create(lv_scr_act());
+    furios_label_container = lv_obj_create(lv_scr_act());
     lv_obj_set_width(furios_label_container, LV_PCT(100));
     lv_obj_set_height(furios_label_container, LV_SIZE_CONTENT);
     lv_obj_set_align(furios_label_container, LV_ALIGN_BOTTOM_MID);
 
     /* FuriOS label text */
-    lv_obj_t *furios_label = lv_label_create(furios_label_container);
+    furios_label = lv_label_create(furios_label_container);
     lv_label_set_text(furios_label, "FuriOS Recovery");
     lv_obj_align(furios_label, LV_ALIGN_BOTTOM_MID, 0, 0);
 
