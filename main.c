@@ -873,9 +873,6 @@ static void restore_main_screen(void) {
         lv_obj_del(keyboard);
         keyboard = NULL;
     }
-
-    /* Re-enable scrolling on main screen */
-    lv_obj_add_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
 }
 
 static void decrypt(void) {
@@ -905,9 +902,6 @@ static void decrypt(void) {
     }
 
     is_keyboard_hidden = false;
-
-    /* Prevent scrolling when keyboard is off-screen */
-    lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
 
     /* Figure out a few numbers for sizing and positioning */
     const int keyboard_height = ver_res > hor_res ? ver_res / 3 : ver_res / 2;
@@ -1283,8 +1277,8 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     /* Clear the screen */
     lv_obj_clean(lv_scr_act());
 
-    /* Enable scrolling for the main screen */
-    lv_obj_add_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
+    /* Disallow scrolling */
+    lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
 
     const int keyboard_height = ver_res > hor_res ? ver_res / 3 : ver_res / 2;
 
@@ -1308,9 +1302,6 @@ static void create_ui(uint32_t hor_res, uint32_t ver_res) {
     lv_obj_t *label_container = lv_obj_create(container);
     lv_obj_set_size(label_container, label_width, LV_SIZE_CONTENT);
     lv_obj_set_style_pad_all(label_container, padding, LV_PART_MAIN);
-
-    /* Enable scrolling for label container on smaller screens */
-    lv_obj_add_flag(label_container, LV_OBJ_FLAG_SCROLLABLE);
 
     /* FuriOS label container */
     lv_obj_t *furios_label_container = lv_obj_create(lv_scr_act());
