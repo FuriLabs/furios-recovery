@@ -287,9 +287,19 @@ static void perform_factory_reset(lv_timer_t *timer);
 static void factory_reset_mbox_value_changed_cb(lv_event_t *event);
 
 /**
- * Handle LV_EVENT_CLICKED events from the factory reset failed messsage box
+ * Handle LV_EVENT_CLICKED events from encryption failed messsage box
  */
 static void close_mbox_cb(lv_event_t *event);
+
+/**
+ * Handle LV_EVENT_CLICKED events from encryption failed messsage box without rebooting
+ */
+static void close_only_mbox_cb(lv_event_t *event);
+
+/**
+ * Handle LV_EVENT_CLICKED events from encryption maximum attempts messsage box and restore to main screen
+ */
+static void close_mbox_and_restore_main_screen_cb(lv_event_t *event);
 
 /**
  * Handle LV_EVENT_VALUE_CHANGED events from the keyboard widget.
@@ -335,6 +345,11 @@ static void factory_reset_password(lv_timer_t *timer);
  * Restores the screen from the decryption page
  */
 static void restore_main_screen(void);
+
+/**
+ * Returns rootfs luks encryption status
+ */
+static luks_state_t get_rootfs_luks_state(void);
 
 /**
  * Decrypts the device
@@ -547,50 +562,53 @@ static void factory_reset_mbox_value_changed_cb(lv_event_t *event) {
 
 static void perform_factory_reset(lv_timer_t *timer) {
     lv_obj_t *resetting_mbox = (lv_obj_t *)timer->user_data;
+    luks_state_t state = get_rootfs_luks_state();
 
-    /* Check both volume groups */
-    int result = -1;
-
-    if (volume_group_exists("/dev/droidian"))
-        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
-
-    if (result != 1 && volume_group_exists("/dev/furios"))
-        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
-
-    if (result == -1) {
-        /* No LVM/rootfs found */
-        lv_msgbox_close(resetting_mbox);
-        static const char *btns[] = {"OK", ""};
-        lv_obj_t *fail_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset - no valid rootfs found", btns, false);
-        lv_obj_set_size(fail_mbox, 400, LV_SIZE_CONTENT);
-        lv_obj_add_event_cb(fail_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_center(fail_mbox);
-    } else {
-        if (result == 1) {
+    switch (state) {
+        case LUKS_STATE_ENCRYPTED_LOCKED:
             enabling_ssh = false;
             mounting_rootfs = false;
-            decrypt(); /* Decrypt LVM if necessary */
             lv_msgbox_close(resetting_mbox);
+            decrypt();
+            return;
+
+        case LUKS_STATE_ENCRYPTED_UNLOCKED:
+        case LUKS_STATE_NOT_ENCRYPTED: {
+            int factory_reset_result = factory_reset();
+
+            lv_msgbox_close(resetting_mbox);
+
+            static const char *btns[] = {"OK", ""};
+            lv_obj_t *mbox = lv_msgbox_create(
+                NULL,
+                NULL,
+                factory_reset_result == 0
+                    ? "Successfully reset to factory settings"
+                    : "Failed to factory reset",
+                btns,
+                false
+            );
+            lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(mbox);
             return;
         }
 
-        /* LVM is not encrypted or unlocked, we can continue */
-        int factory_reset_result = factory_reset();
-
-        lv_msgbox_close(resetting_mbox);
-
-        if (factory_reset_result == 0) {
+        case LUKS_STATE_ERROR:
+        default: {
+            lv_msgbox_close(resetting_mbox);
             static const char *btns[] = {"OK", ""};
-            lv_obj_t *success_mbox = lv_msgbox_create(NULL, NULL, "Successfully reset to factory settings", btns, false);
-            lv_obj_set_size(success_mbox, 400, LV_SIZE_CONTENT);
-            lv_obj_add_event_cb(success_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
-            lv_obj_center(success_mbox);
-        } else {
-            static const char *btns[] = {"OK", ""};
-            lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset", btns, false);
-            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
-            lv_obj_add_event_cb(error_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
-            lv_obj_center(error_mbox);
+            lv_obj_t *fail_mbox = lv_msgbox_create(
+                NULL,
+                NULL,
+                "Failed to factory reset - unable to determine encryption state",
+                btns,
+                false
+            );
+            lv_obj_set_size(fail_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(fail_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(fail_mbox);
+            return;
         }
     }
 }
@@ -602,6 +620,17 @@ static void close_mbox_cb(lv_event_t *event) {
     sleep(3);
     reboot_device();
     lv_msgbox_close(mbox);
+}
+
+static void close_only_mbox_cb(lv_event_t *event) {
+    lv_obj_t *mbox = lv_event_get_current_target(event);
+    lv_msgbox_close(mbox);
+}
+
+static void close_mbox_and_restore_main_screen_cb(lv_event_t *event) {
+    lv_obj_t *mbox = lv_event_get_current_target(event);
+    lv_msgbox_close(mbox);
+    restore_main_screen();
 }
 
 static void keyboard_value_changed_cb(lv_event_t *event) {
@@ -633,19 +662,44 @@ static void check_password_enable_ssh(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
 
-    /* Use auto-detection for volume group */
     int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
+        attempt_count = 0;
         enable_ssh();
         restore_main_screen();
     } else if (result == 2) {
         attempt_count++;
+
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox;
+
         if (attempt_count >= 3) {
-            lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempt reached.", NULL, false);
+            error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempts reached.", btns, false);
             lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_mbox_and_restore_main_screen_cb, LV_EVENT_VALUE_CHANGED, NULL);
             lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            attempt_count = 0;
+        } else {
+            error_mbox = lv_msgbox_create(NULL, NULL, "Incorrect password.", btns, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            lv_obj_add_state(textarea, LV_STATE_FOCUSED);
         }
+    } else {
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Failed to unlock encrypted volume.", btns, false);
+        lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+        lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_center(error_mbox);
+
+        lv_textarea_set_text(textarea, "");
+        lv_obj_add_state(textarea, LV_STATE_FOCUSED);
     }
 }
 
@@ -653,19 +707,44 @@ static void check_password_mount_rootfs(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
 
-    /* Use auto-detection for volume group */
     int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
+        attempt_count = 0;
         toggle_mount_rootfs();
         restore_main_screen();
     } else if (result == 2) {
         attempt_count++;
+
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox;
+
         if (attempt_count >= 3) {
-            lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempt reached.", NULL, false);
+            error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempts reached.", btns, false);
             lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_mbox_and_restore_main_screen_cb, LV_EVENT_VALUE_CHANGED, NULL);
             lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            attempt_count = 0;
+        } else {
+            error_mbox = lv_msgbox_create(NULL, NULL, "Incorrect password.", btns, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            lv_obj_add_state(textarea, LV_STATE_FOCUSED);
         }
+    } else {
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Failed to unlock encrypted volume.", btns, false);
+        lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+        lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_center(error_mbox);
+
+        lv_textarea_set_text(textarea, "");
+        lv_obj_add_state(textarea, LV_STATE_FOCUSED);
     }
 }
 
@@ -673,22 +752,49 @@ static void check_password_factory_reset(lv_obj_t *textarea) {
     const char *password = lv_textarea_get_text(textarea);
     static int attempt_count = 0;
 
-    /* Use auto-detection for volume group */
     int result = mount_luks_lvm_helper(password, VG_AUTO_DETECT);
 
     if (result == EXIT_SUCCESS) {
+        attempt_count = 0;
+
         lv_obj_t *resetting_mbox = lv_msgbox_create(NULL, NULL, "Resetting device...", NULL, false);
         lv_obj_set_size(resetting_mbox, 400, LV_SIZE_CONTENT);
         lv_obj_center(resetting_mbox);
+
         lv_timer_t *timer = lv_timer_create(factory_reset_password, 500, resetting_mbox);
         lv_timer_set_repeat_count(timer, 1);
     } else if (result == 2) {
         attempt_count++;
+
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox;
+
         if (attempt_count >= 3) {
-            lv_obj_t *resetting_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempt reached.", NULL, false);
-            lv_obj_set_size(resetting_mbox, 400, LV_SIZE_CONTENT);
-            lv_obj_center(resetting_mbox);
+            error_mbox = lv_msgbox_create(NULL, NULL, "Maximum password attempts reached.", btns, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_mbox_and_restore_main_screen_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            attempt_count = 0;
+        } else {
+            error_mbox = lv_msgbox_create(NULL, NULL, "Incorrect password.", btns, false);
+            lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(error_mbox);
+
+            lv_textarea_set_text(textarea, "");
+            lv_obj_add_state(textarea, LV_STATE_FOCUSED);
         }
+    } else {
+        static const char *btns[] = {"OK", ""};
+        lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Failed to unlock encrypted volume.", btns, false);
+        lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
+        lv_obj_add_event_cb(error_mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_center(error_mbox);
+
+        lv_textarea_set_text(textarea, "");
+        lv_obj_add_state(textarea, LV_STATE_FOCUSED);
     }
 }
 
@@ -699,19 +805,19 @@ static void factory_reset_password(lv_timer_t *timer) {
 
     lv_msgbox_close(resetting_mbox);
 
-    if (factory_reset_result == 0) {
-        static const char *btns[] = {"OK", ""};
-        lv_obj_t *success_mbox = lv_msgbox_create(NULL, NULL, "Successfully reset to factory settings", btns, false);
-        lv_obj_set_size(success_mbox, 400, LV_SIZE_CONTENT);
-        lv_obj_add_event_cb(success_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_center(success_mbox);
-    } else {
-        static const char *btns[] = {"OK", ""};
-        lv_obj_t *error_mbox = lv_msgbox_create(NULL, NULL, "Failed to factory reset", btns, false);
-        lv_obj_set_size(error_mbox, 400, LV_SIZE_CONTENT);
-        lv_obj_add_event_cb(error_mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_center(error_mbox);
-    }
+    static const char *btns[] = {"OK", ""};
+    lv_obj_t *mbox = lv_msgbox_create(
+        NULL,
+        NULL,
+        factory_reset_result == 0
+            ? "Successfully reset to factory settings"
+            : "Failed to factory reset",
+        btns,
+        false
+    );
+    lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+    lv_obj_add_event_cb(mbox, close_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_center(mbox);
 }
 
 static void toggle_mount_rootfs(void) {
@@ -777,20 +883,33 @@ static void toggle_mount_rootfs(void) {
 static void toggle_ssh_btn_clicked_cb(lv_event_t *event) {
     LV_UNUSED(event);
 
-    /* Check both possible volume groups */
-    int result = -1;
+    luks_state_t state = get_rootfs_luks_state();
 
-    if (volume_group_exists("/dev/droidian"))
-        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
-    if (result != 1 && volume_group_exists("/dev/furios"))
-        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
+    switch (state) {
+        case LUKS_STATE_ENCRYPTED_LOCKED:
+            mounting_rootfs = false;
+            enabling_ssh = true;
+            decrypt();
+            break;
 
-    if (result == 1) {
-        mounting_rootfs = false;
-        enabling_ssh = true;
-        decrypt();
-    } else {
-        enable_ssh();
+        case LUKS_STATE_ENCRYPTED_UNLOCKED:
+        case LUKS_STATE_NOT_ENCRYPTED:
+            enabling_ssh = false;
+            mounting_rootfs = false;
+            enable_ssh();
+            break;
+
+        case LUKS_STATE_ERROR:
+        default: {
+            static const char *btns[] = {"OK", ""};
+            lv_obj_t *mbox = lv_msgbox_create(NULL, NULL,
+                                              "Unable to determine encryption state. SSH was not changed.",
+                                              btns, false);
+            lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(mbox);
+            break;
+        }
     }
 }
 
@@ -831,20 +950,33 @@ static void enable_ssh() {
 static void toggle_mount_rootfs_btn_clicked_cb(lv_event_t *event) {
     LV_UNUSED(event);
 
-    /* Check both possible volume groups */
-    int result = -1;
+    luks_state_t state = get_rootfs_luks_state();
 
-    if (volume_group_exists("/dev/droidian"))
-        result = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
-    if (result != 1 && volume_group_exists("/dev/furios"))
-        result = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
+    switch (state) {
+        case LUKS_STATE_ENCRYPTED_LOCKED:
+            enabling_ssh = false;
+            mounting_rootfs = true;
+            decrypt();
+            break;
 
-    if (result == 1) {
-        enabling_ssh = false;
-        mounting_rootfs = true;
-        decrypt();
-    } else {
-        toggle_mount_rootfs();
+        case LUKS_STATE_ENCRYPTED_UNLOCKED:
+        case LUKS_STATE_NOT_ENCRYPTED:
+            enabling_ssh = false;
+            mounting_rootfs = false;
+            toggle_mount_rootfs();
+            break;
+
+        case LUKS_STATE_ERROR:
+        default: {
+            static const char *btns[] = {"OK", ""};
+            lv_obj_t *mbox = lv_msgbox_create(NULL, NULL,
+                                              "Unable to determine encryption state. Rootfs was not mounted.",
+                                              btns, false);
+            lv_obj_set_size(mbox, 400, LV_SIZE_CONTENT);
+            lv_obj_add_event_cb(mbox, close_only_mbox_cb, LV_EVENT_VALUE_CHANGED, NULL);
+            lv_obj_center(mbox);
+            break;
+        }
     }
 }
 
@@ -855,6 +987,30 @@ static void restore_main_screen(void) {
 
     /* Show all main window widgets */
     lv_obj_clear_flag(container, LV_OBJ_FLAG_HIDDEN);
+}
+
+static luks_state_t get_rootfs_luks_state(void) {
+    luks_state_t state = LUKS_STATE_ERROR;
+
+    if (volume_group_exists("/dev/droidian")) {
+        state = is_lv_encrypted_with_luks("/dev/droidian/droidian-reserved", 64);
+        if (state == LUKS_STATE_ENCRYPTED_LOCKED ||
+            state == LUKS_STATE_ENCRYPTED_UNLOCKED ||
+            state == LUKS_STATE_NOT_ENCRYPTED) {
+            return state;
+        }
+    }
+
+    if (volume_group_exists("/dev/furios")) {
+        state = is_lv_encrypted_with_luks("/dev/furios/furios-reserved", 64);
+        if (state == LUKS_STATE_ENCRYPTED_LOCKED ||
+            state == LUKS_STATE_ENCRYPTED_UNLOCKED ||
+            state == LUKS_STATE_NOT_ENCRYPTED) {
+            return state;
+        }
+    }
+
+    return LUKS_STATE_ERROR;
 }
 
 static void decrypt(void) {

@@ -27,6 +27,13 @@
 #define VG_DROIDIAN    1
 #define VG_FURIOS      2
 
+typedef enum {
+    LUKS_STATE_ERROR = -1,
+    LUKS_STATE_NOT_ENCRYPTED = 0,
+    LUKS_STATE_ENCRYPTED_LOCKED = 1,
+    LUKS_STATE_ENCRYPTED_UNLOCKED = 2,
+} luks_state_t;
+
 /**
  * Check if a volume group exists
  *
@@ -40,18 +47,9 @@ int volume_group_exists(const char *vg_path);
  *
  * @param device_path path to the logical volume to check (can be NULL to auto-detect)
  * @param print_bytes number of bytes to read for checking
- * @return 1 if encrypted, 0 if not, -1 on error
+ * @return 1 if encrypted, 2 if unlocked, 1 if not encrypted, -1 on error
  */
-int is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes);
-
-/**
- * Mount LUKS LVM with support for both Droidian and FuriOS VGs
- *
- * @param passphrase The passphrase to use for decryption
- * @param vg_type VG type: 0=auto-detect, 1=droidian, 2=furios
- * @return EXIT_SUCCESS on success, EXIT_FAILURE or error code on failure
- */
-int mount_luks_lvm(const char *passphrase, int vg_type);
+luks_state_t is_lv_encrypted_with_luks(const char *device_path, size_t print_bytes);
 
 /**
  * Helper function for mounting LUKS LVM
