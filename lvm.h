@@ -60,4 +60,18 @@ luks_state_t is_lv_encrypted_with_luks(const char *device_path, size_t print_byt
  */
 int mount_luks_lvm_helper(const char *passphrase, int vg_type);
 
+/**
+ * Remove encrypted device-mapper nodes
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int dmsetup_remove_encrypted(void);
+
+/**
+ * Refresh LVM state (deactivate + rescan + reactivate)
+ *
+ * @return 0 on success, non-zero on failure
+ */
+int refresh_lvm(void);
+
 #endif // LVM_H

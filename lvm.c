@@ -245,3 +245,80 @@ int mount_luks_lvm_helper(const char *passphrase, int vg_type) {
         }
     }
 }
+
+int dmsetup_remove_encrypted(void) {
+    int result = 0;
+    struct stat st;
+
+    if (stat(DROIDIAN_DECRYPTED, &st) == 0) {
+        if (system("dmsetup remove " DROIDIAN_DECRYPTED) != 0) {
+            printf("Failed to remove droidian encrypted mapper\n");
+            result = -1;
+        }
+    }
+
+    if (stat(FURIOS_DECRYPTED, &st) == 0) {
+        if (system("dmsetup remove " FURIOS_DECRYPTED) != 0) {
+            printf("Failed to remove furios encrypted mapper\n");
+            result = -1;
+        }
+    }
+
+    return result;
+}
+
+int refresh_lvm(void) {
+    int result = 0;
+    int found_vg = 0;
+
+    printf("Refreshing LVM state\n");
+
+    if (volume_group_exists("/dev/droidian")) {
+        found_vg = 1;
+
+        if (system("lvm vgchange -an droidian") != 0) {
+            printf("Warning: failed to deactivate droidian VG\n");
+            result = -1;
+        }
+    }
+
+    if (volume_group_exists("/dev/furios")) {
+        found_vg = 1;
+
+        if (system("lvm vgchange -an furios") != 0) {
+            printf("Warning: failed to deactivate furios VG\n");
+            result = -1;
+        }
+    }
+
+    if (!found_vg) {
+        printf("Warning: no supported volume groups found to refresh\n");
+        return -1;
+    }
+
+    if (system("lvm pvscan") != 0) {
+        printf("Warning: pvscan failed\n");
+        result = -1;
+    }
+
+    if (system("lvm vgscan") != 0) {
+        printf("Warning: vgscan failed\n");
+        result = -1;
+    }
+
+    if (volume_group_exists("/dev/droidian")) {
+        if (system("lvm vgchange -ay droidian") != 0) {
+            printf("Warning: failed to activate droidian VG\n");
+            result = -1;
+        }
+    }
+
+    if (volume_group_exists("/dev/furios")) {
+        if (system("lvm vgchange -ay furios") != 0) {
+            printf("Warning: failed to activate furios VG\n");
+            result = -1;
+        }
+    }
+
+    return result;
+}

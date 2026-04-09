@@ -112,6 +112,10 @@ int factory_reset(void) {
         return -1;
     }
 
+    sync();
+    dmsetup_remove_encrypted();
+    refresh_lvm();
+
     if (stat("/system_mnt/boot.img", &buffer) == 0) {
         snprintf(cmd, sizeof(cmd),
                  "dd if=/system_mnt/boot.img of=/dev/disk/by-partlabel/boot%s bs=4M",
