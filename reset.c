@@ -184,18 +184,22 @@ int factory_reset(void) {
 
     /* Wipe bootman configuration files */
     char* dt_compatible = read_dt_compatible();
+
     if (dt_compatible != NULL) {
         printf("DT compatible %s\n", dt_compatible);
-        if (strcmp(dt_compatible, "furilabs,flx1") == 0) {
-            printf("Detected furilabs,flx1 device, formatting vendor_boot_a partition\n");
+
+        if (strcmp(dt_compatible, "furilabs,flx1") == 0 || strcmp(dt_compatible, "furilabs,flx1s") == 0) {
+            printf("Detected supported furilabs device (%s), formatting vendor_boot_a partition\n", dt_compatible);
+
             snprintf(cmd, sizeof(cmd), "mke2fs -b 4096 /dev/disk/by-partlabel/vendor_boot_a");
             result = system(cmd);
-            if (result != 0) {
+
+            if (result != 0)
                 printf("Failed to format vendor_boot_a partition\n");
-            } else {
+            else
                 printf("Successfully formatted vendor_boot_a partition\n");
-            }
         }
+
         free(dt_compatible);
     }
 
